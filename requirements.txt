@@ -1,5 +1,5 @@
-streamlit
-paho-mqtt
-pillow
-pandas
-streamlit-autorefresh
+streamlit==1.32.2
+paho-mqtt==1.6.1
+pandas==2.2.2
+Pillow==10.3.0
+streamlit-autorefresh==1.0.1
