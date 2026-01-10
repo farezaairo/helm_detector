@@ -8,9 +8,9 @@ from PIL import Image
 from paho.mqtt import client as mqtt
 from streamlit_autorefresh import st_autorefresh
 
-# ================== KONFIGURASI MQTT (HIVEMQ CLOUD – WSS) ==================
+# ================== MQTT CONFIG (HIVEMQ CLOUD - WSS) ==================
 MQTT_BROKER = "a6ba19304d3b42309f1342d59d8a5254.s1.eu.hivemq.cloud"
-MQTT_PORT   = 8884  # ✅ WebSocket Secure
+MQTT_PORT   = 8884
 
 MQTT_USER = "Alpha"
 MQTT_PASS = "Centauri1"
@@ -34,19 +34,16 @@ st.caption("IoT + AI Safety Monitoring | ESP32-CAM | HiveMQ Cloud")
 st_autorefresh(interval=REFRESH_INTERVAL_MS, key="auto_refresh")
 
 # ================== SESSION STATE ==================
-defaults = {
+for k, v in {
     "helm_data": {},
     "history": {},
     "images": {},
-    "mqtt_started": False,
     "mqtt_status": "DISCONNECTED",
     "last_message_time": "-",
     "selected_helm": "ALL",
     "global_threshold": 0.7,
-    "danger_count": 0
-}
-
-for k, v in defaults.items():
+    "danger_count": 0,
+}.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
@@ -59,37 +56,33 @@ def on_message(client, userdata, msg):
         payload = json.loads(msg.payload.decode())
 
         if msg.topic.startswith("helm/data"):
-            helm_id = payload["id"]
+            hid = payload["id"]
             payload["time"] = time.strftime("%H:%M:%S")
-
-            st.session_state.helm_data[helm_id] = payload
-            st.session_state.history.setdefault(helm_id, []).append(payload)
-            st.session_state.history[helm_id] = st.session_state.history[helm_id][-MAX_HISTORY:]
+            st.session_state.helm_data[hid] = payload
+            st.session_state.history.setdefault(hid, []).append(payload)
+            st.session_state.history[hid] = st.session_state.history[hid][-MAX_HISTORY:]
 
         elif msg.topic.startswith("helm/image"):
-            helm_id = payload["id"]
+            hid = payload["id"]
             img = base64.b64decode(payload["image"])
-            st.session_state.images[helm_id] = Image.open(BytesIO(img))
+            st.session_state.images[hid] = Image.open(BytesIO(img))
 
         st.session_state.danger_count = sum(
             1 for h in st.session_state.helm_data.values()
             if h.get("status") == "BAHAYA"
         )
-
-    except Exception:
+    except:
         pass
 
-# ================== MQTT START (NON BLOCKING – STREAMLIT SAFE) ==================
-def start_mqtt():
+# ================== MQTT RESOURCE (ANTI TIMEOUT) ==================
+@st.cache_resource
+def mqtt_client():
     client = mqtt.Client(
-        client_id=f"streamlit-{int(time.time())}",
         protocol=mqtt.MQTTv311,
-        transport="websockets",
-        clean_session=True
+        transport="websockets"
     )
-
     client.username_pw_set(MQTT_USER, MQTT_PASS)
-    client.tls_set()  # ✅ WSS TLS
+    client.tls_set()
 
     client.on_message = on_message
 
@@ -103,31 +96,20 @@ def start_mqtt():
 
     client.on_connect = on_connect
 
-    # ✅ ASYNC → TIDAK BLOCK STREAMLIT
-    client.connect_async(MQTT_BROKER, MQTT_PORT, 60)
+    client.connect(MQTT_BROKER, MQTT_PORT, 60)
     client.loop_start()
-
     return client
 
-if not st.session_state.mqtt_started:
-    st.session_state.mqtt_client = start_mqtt()
-    st.session_state.mqtt_started = True
+client = mqtt_client()
 
 # ================== SIDEBAR ==================
 with st.sidebar:
     st.title("🪖 Helmet Control Center")
 
-    if st.session_state.mqtt_status == "CONNECTED":
-        st.success("🟢 MQTT ONLINE (HiveMQ)")
-    else:
-        st.error("🔴 MQTT OFFLINE")
-
+    st.success("🟢 MQTT ONLINE") if st.session_state.mqtt_status == "CONNECTED" else st.error("🔴 MQTT OFFLINE")
     st.caption(f"Last Msg: {st.session_state.last_message_time}")
 
-    if st.session_state.danger_count > 0:
-        st.error(f"🚨 {st.session_state.danger_count} HELM BAHAYA")
-    else:
-        st.success("✅ Semua Helm Aman")
+    st.success("✅ Semua Helm Aman") if st.session_state.danger_count == 0 else st.error(f"🚨 {st.session_state.danger_count} HELM BAHAYA")
 
     st.divider()
 
@@ -136,44 +118,32 @@ with st.sidebar:
 
     st.divider()
 
-    st.markdown("### 🧠 Global AI Threshold")
     st.session_state.global_threshold = st.slider(
-        "Threshold", 0.3, 0.95,
-        st.session_state.global_threshold, 0.05
+        "🧠 Global AI Threshold",
+        0.3, 0.95,
+        st.session_state.global_threshold,
+        0.05
     )
 
     if st.button("📤 Broadcast ke Semua Helm"):
         for hid in st.session_state.helm_data:
-            st.session_state.mqtt_client.publish(
+            client.publish(
                 MQTT_CONFIG_TOPIC.format(hid),
                 json.dumps({"threshold": st.session_state.global_threshold})
             )
         st.success("Threshold dikirim")
-
-    st.divider()
-
-    if st.button("🔄 Reconnect MQTT"):
-        try:
-            st.session_state.mqtt_client.loop_stop()
-            st.session_state.mqtt_client.disconnect()
-        except:
-            pass
-        st.session_state.mqtt_client = start_mqtt()
-        st.success("MQTT Reconnected")
-
-    st.caption("Streamlit Cloud • ESP32 • HiveMQ Cloud")
 
 # ================== DASHBOARD ==================
 if not st.session_state.helm_data:
     st.info("⏳ Menunggu data dari helm ESP32...")
     st.stop()
 
-for helm_id, d in st.session_state.helm_data.items():
-    if st.session_state.selected_helm != "ALL" and helm_id != st.session_state.selected_helm:
+for hid, d in st.session_state.helm_data.items():
+    if st.session_state.selected_helm != "ALL" and hid != st.session_state.selected_helm:
         continue
 
     st.divider()
-    st.subheader(f"🪖 HELM ID {helm_id}")
+    st.subheader(f"🪖 HELM ID {hid}")
 
     col1, col2, col3, col4 = st.columns([1, 1, 1.3, 2])
 
@@ -188,30 +158,25 @@ for helm_id, d in st.session_state.helm_data.items():
         st.metric("🔥 Bahaya", f"{d['bahaya']*100:.1f}%")
 
     with col3:
-        threshold = st.slider(
+        th = st.slider(
             "Ambang Bahaya",
             0.3, 0.95,
             st.session_state.global_threshold,
             0.05,
-            key=f"th_{helm_id}"
+            key=f"th_{hid}"
         )
-
-        if st.button("Kirim ke Helm", key=f"send_{helm_id}"):
-            st.session_state.mqtt_client.publish(
-                MQTT_CONFIG_TOPIC.format(helm_id),
-                json.dumps({"threshold": threshold})
+        if st.button("Kirim ke Helm", key=f"send_{hid}"):
+            client.publish(
+                MQTT_CONFIG_TOPIC.format(hid),
+                json.dumps({"threshold": th})
             )
             st.success("Threshold dikirim")
 
     with col4:
-        if helm_id in st.session_state.images:
-            st.image(st.session_state.images[helm_id], use_column_width=True)
-        else:
-            st.info("Belum ada snapshot")
+        st.image(st.session_state.images[hid], use_column_width=True) if hid in st.session_state.images else st.info("Belum ada snapshot")
 
-    history = st.session_state.history.get(helm_id, [])
-    if history:
-        df = pd.DataFrame(history)
+    df = pd.DataFrame(st.session_state.history.get(hid, []))
+    if not df.empty:
         df["akurasi_percent"] = df["akurasi"] * 100
         st.line_chart(df.set_index("time")["jarak"])
         st.bar_chart(df.set_index("time")["akurasi_percent"])
