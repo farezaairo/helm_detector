@@ -1,5 +1,5 @@
 streamlit
 paho-mqtt
+pillow
 pandas
-Pillow
 streamlit-autorefresh
