@@ -8,9 +8,9 @@ from PIL import Image
 from paho.mqtt import client as mqtt
 from streamlit_autorefresh import st_autorefresh
 
-# ================== KONFIGURASI MQTT (HIVEMQ CLOUD) ==================
+# ================== KONFIGURASI MQTT (HIVEMQ CLOUD – WSS) ==================
 MQTT_BROKER = "a6ba19304d3b42309f1342d59d8a5254.s1.eu.hivemq.cloud"
-MQTT_PORT   = 8883  # ✅ WAJIB TLS
+MQTT_PORT   = 8884  # ✅ WebSocket Secure
 
 MQTT_USER = "Alpha"
 MQTT_PASS = "Centauri1"
@@ -58,7 +58,6 @@ def on_message(client, userdata, msg):
 
         payload = json.loads(msg.payload.decode())
 
-        # ===== DATA =====
         if msg.topic.startswith("helm/data"):
             helm_id = payload["id"]
             payload["time"] = time.strftime("%H:%M:%S")
@@ -67,13 +66,11 @@ def on_message(client, userdata, msg):
             st.session_state.history.setdefault(helm_id, []).append(payload)
             st.session_state.history[helm_id] = st.session_state.history[helm_id][-MAX_HISTORY:]
 
-        # ===== IMAGE =====
         elif msg.topic.startswith("helm/image"):
             helm_id = payload["id"]
             img = base64.b64decode(payload["image"])
             st.session_state.images[helm_id] = Image.open(BytesIO(img))
 
-        # ===== HITUNG BAHAYA =====
         st.session_state.danger_count = sum(
             1 for h in st.session_state.helm_data.values()
             if h.get("status") == "BAHAYA"
@@ -82,17 +79,17 @@ def on_message(client, userdata, msg):
     except Exception:
         pass
 
-# ================== MQTT START (FIX HIVE MQ) ==================
+# ================== MQTT START (NON BLOCKING – STREAMLIT SAFE) ==================
 def start_mqtt():
     client = mqtt.Client(
         client_id=f"streamlit-{int(time.time())}",
+        protocol=mqtt.MQTTv311,
+        transport="websockets",
         clean_session=True
     )
 
     client.username_pw_set(MQTT_USER, MQTT_PASS)
-
-    # ✅ WAJIB UNTUK HIVE MQ CLOUD
-    client.tls_set()
+    client.tls_set()  # ✅ WSS TLS
 
     client.on_message = on_message
 
@@ -105,8 +102,11 @@ def start_mqtt():
             st.session_state.mqtt_status = "FAILED"
 
     client.on_connect = on_connect
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+
+    # ✅ ASYNC → TIDAK BLOCK STREAMLIT
+    client.connect_async(MQTT_BROKER, MQTT_PORT, 60)
     client.loop_start()
+
     return client
 
 if not st.session_state.mqtt_started:
@@ -216,6 +216,5 @@ for helm_id, d in st.session_state.helm_data.items():
         st.line_chart(df.set_index("time")["jarak"])
         st.bar_chart(df.set_index("time")["akurasi_percent"])
 
-# ================== FOOTER ==================
 st.divider()
 st.caption("Smart Safety Helmet | ESP32-CAM + AI + HiveMQ Cloud + Streamlit")
