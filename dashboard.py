@@ -8,29 +8,29 @@ from PIL import Image
 from paho.mqtt import client as mqtt
 from streamlit_autorefresh import st_autorefresh
 
-# ================== MQTT CONFIG (HIVEMQ CLOUD - WSS) ==================
-MQTT_BROKER = "a6ba19304d3b42309f1342d59d8a5254.s1.eu.hivemq.cloud"
-MQTT_PORT   = 8884
+# ================== MQTT CONFIG (FROM SECRETS) ==================
+# Mengambil kredensial dari st.secrets agar aman di GitHub
+MQTT_BROKER = st.secrets["mqtt"]["broker"]
+MQTT_PORT   = st.secrets["mqtt"]["port"]
+MQTT_USER   = st.secrets["mqtt"]["user"]
+MQTT_PASS   = st.secrets["mqtt"]["pass"]
 
-MQTT_USER = "Alpha"
-MQTT_PASS = "Centauri1"
-
-MQTT_DATA_TOPIC   = "helm/data/#"
-MQTT_IMAGE_TOPIC  = "helm/image/#"
-MQTT_CONFIG_TOPIC = "helm/config/{}"
+# Struktur Topik HiveMQ (Lebih simpel dari Adafruit)
+MQTT_DATA_TOPIC   = st.secrets["mqtt"]["topic_data"]    # contoh: helmet/+/data
+MQTT_IMAGE_TOPIC  = st.secrets["mqtt"]["topic_image"]   # contoh: helmet/+/image
+MQTT_CONFIG_TOPIC = st.secrets["mqtt"]["topic_config"]  # contoh: helmet/{}/config
 
 REFRESH_INTERVAL_MS = 2000
 MAX_HISTORY = 20
 
-# ================== STREAMLIT SETUP ==================
 st.set_page_config(
     page_title="Smart Safety Helmet Dashboard",
     layout="wide"
 )
-
 st.title("🪖 Smart Safety Helmet Dashboard")
-st.caption("IoT + AI Safety Monitoring | ESP32-CAM | HiveMQ Cloud")
+st.caption("IoT + AI Safety Monitoring | ESP32-CAM | HiveMQ Cloud MQTT")
 
+# Auto refresh untuk memperbarui UI saat ada data baru di session_state
 st_autorefresh(interval=REFRESH_INTERVAL_MS, key="auto_refresh")
 
 # ================== SESSION STATE ==================
@@ -52,134 +52,143 @@ def on_message(client, userdata, msg):
     try:
         st.session_state.mqtt_status = "CONNECTED"
         st.session_state.last_message_time = time.strftime("%H:%M:%S")
+        
+        # Parsing ID Helm dari topik (misal: helmet/HELM01/data -> HELM01)
+        topic_parts = msg.topic.split("/")
+        hid = topic_parts[1] 
 
-        payload = json.loads(msg.payload.decode())
-
-        if msg.topic.startswith("helm/data"):
-            hid = payload["id"]
+        if msg.topic.endswith("/data"):
+            payload = json.loads(msg.payload.decode())
             payload["time"] = time.strftime("%H:%M:%S")
             st.session_state.helm_data[hid] = payload
-            st.session_state.history.setdefault(hid, []).append(payload)
+            
+            # Update History
+            if hid not in st.session_state.history:
+                st.session_state.history[hid] = []
+            st.session_state.history[hid].append(payload)
             st.session_state.history[hid] = st.session_state.history[hid][-MAX_HISTORY:]
 
-        elif msg.topic.startswith("helm/image"):
-            hid = payload["id"]
-            img = base64.b64decode(payload["image"])
-            st.session_state.images[hid] = Image.open(BytesIO(img))
+        elif msg.topic.endswith("/image"):
+            # HiveMQ mendukung payload besar untuk image base64
+            payload = json.loads(msg.payload.decode())
+            img_data = base64.b64decode(payload["image"])
+            st.session_state.images[hid] = Image.open(BytesIO(img_data))
 
+        # Hitung status bahaya
         st.session_state.danger_count = sum(
             1 for h in st.session_state.helm_data.values()
             if h.get("status") == "BAHAYA"
         )
-    except:
-        pass
+    except Exception as e:
+        print(f"Error parsing message: {e}")
 
-# ================== MQTT RESOURCE (ANTI TIMEOUT) ==================
+# ================== MQTT RESOURCE (STABLE CONNECTION) ==================
 @st.cache_resource
-def mqtt_client():
-    client = mqtt.Client(
-        protocol=mqtt.MQTTv311,
-        transport="websockets"
-    )
+def get_mqtt_client():
+    # Menggunakan CallbackAPIVersion.VERSION2 untuk library paho-mqtt terbaru
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    
+    # WAJIB UNTUK HIVEMQ CLOUD
+    client.tls_set() 
     client.username_pw_set(MQTT_USER, MQTT_PASS)
-    client.tls_set()
-
+    
     client.on_message = on_message
 
-    def on_connect(c, u, f, rc):
+    def on_connect(c, u, f, rc, properties=None):
         if rc == 0:
             st.session_state.mqtt_status = "CONNECTED"
             c.subscribe(MQTT_DATA_TOPIC)
             c.subscribe(MQTT_IMAGE_TOPIC)
         else:
-            st.session_state.mqtt_status = "FAILED"
+            st.session_state.mqtt_status = f"FAILED ({rc})"
 
     client.on_connect = on_connect
+    
+    try:
+        client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        client.loop_start()
+        return client
+    except Exception as e:
+        st.error(f"Koneksi Gagal: {e}")
+        return None
 
-    client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    client.loop_start()
-    return client
-
-client = mqtt_client()
+client = get_mqtt_client()
 
 # ================== SIDEBAR ==================
 with st.sidebar:
-    st.title("🪖 Helmet Control Center")
-
-    st.success("🟢 MQTT ONLINE") if st.session_state.mqtt_status == "CONNECTED" else st.error("🔴 MQTT OFFLINE")
+    st.title("🪖 Helmet Control")
+    if st.session_state.mqtt_status == "CONNECTED":
+        st.success("🟢 HiveMQ ONLINE")
+    else:
+        st.error(f"🔴 MQTT {st.session_state.mqtt_status}")
+        
     st.caption(f"Last Msg: {st.session_state.last_message_time}")
-
-    st.success("✅ Semua Helm Aman") if st.session_state.danger_count == 0 else st.error(f"🚨 {st.session_state.danger_count} HELM BAHAYA")
-
+    
+    if st.session_state.danger_count == 0:
+        st.success("✅ Semua Helm Aman")
+    else:
+        st.error(f"🚨 {st.session_state.danger_count} HELM BAHAYA")
+    
     st.divider()
-
     helm_list = ["ALL"] + list(st.session_state.helm_data.keys())
     st.session_state.selected_helm = st.selectbox("🎯 Pilih Helm", helm_list)
-
+    
     st.divider()
+    st.session_state.global_threshold = st.slider("🧠 Global AI Threshold", 0.3, 0.95, st.session_state.global_threshold, 0.05)
+    
+    if st.button("📤 Broadcast ke Semua"):
+        if client:
+            for hid in st.session_state.helm_data:
+                topic = MQTT_CONFIG_TOPIC.format(hid)
+                client.publish(topic, json.dumps({"threshold": st.session_state.global_threshold}))
+            st.success("Broadcast Terkirim")
 
-    st.session_state.global_threshold = st.slider(
-        "🧠 Global AI Threshold",
-        0.3, 0.95,
-        st.session_state.global_threshold,
-        0.05
-    )
-
-    if st.button("📤 Broadcast ke Semua Helm"):
-        for hid in st.session_state.helm_data:
-            client.publish(
-                MQTT_CONFIG_TOPIC.format(hid),
-                json.dumps({"threshold": st.session_state.global_threshold})
-            )
-        st.success("Threshold dikirim")
-
-# ================== DASHBOARD ==================
+# ================== DASHBOARD UI ==================
 if not st.session_state.helm_data:
-    st.info("⏳ Menunggu data dari helm ESP32...")
+    st.info("⏳ Menunggu data dari broker HiveMQ Cloud...")
     st.stop()
 
 for hid, d in st.session_state.helm_data.items():
     if st.session_state.selected_helm != "ALL" and hid != st.session_state.selected_helm:
         continue
-
+        
     st.divider()
-    st.subheader(f"🪖 HELM ID {hid}")
-
+    st.subheader(f"🪖 HELM ID: {hid}")
+    
     col1, col2, col3, col4 = st.columns([1, 1, 1.3, 2])
-
+    
     with col1:
-        st.error("⚠️ BAHAYA") if d["status"] == "BAHAYA" else st.success("✅ AMAN")
-        st.metric("📏 Jarak (cm)", d["jarak"])
-        st.metric("📡 RSSI", f"{d['rssi']} dBm")
-
+        if d.get("status") == "BAHAYA":
+            st.error("⚠️ BAHAYA")
+        else:
+            st.success("✅ AMAN")
+        st.metric("📏 Jarak (cm)", d.get("jarak", 0))
+        st.metric("📡 RSSI", f"{d.get('rssi', 0)} dBm")
+        
     with col2:
-        st.metric("🧠 Objek AI", d["objek"])
-        st.metric("🎯 Akurasi", f"{d['akurasi']*100:.1f}%")
-        st.metric("🔥 Bahaya", f"{d['bahaya']*100:.1f}%")
-
+        st.metric("🧠 Objek AI", d.get("objek", "-"))
+        st.metric("🎯 Akurasi", f"{d.get('akurasi', 0)*100:.1f}%")
+        st.metric("🔥 Potensi", f"{d.get('bahaya', 0)*100:.1f}%")
+        
     with col3:
-        th = st.slider(
-            "Ambang Bahaya",
-            0.3, 0.95,
-            st.session_state.global_threshold,
-            0.05,
-            key=f"th_{hid}"
-        )
-        if st.button("Kirim ke Helm", key=f"send_{hid}"):
-            client.publish(
-                MQTT_CONFIG_TOPIC.format(hid),
-                json.dumps({"threshold": th})
-            )
-            st.success("Threshold dikirim")
-
+        th = st.slider(f"Ambang {hid}", 0.3, 0.95, st.session_state.global_threshold, 0.05, key=f"th_{hid}")
+        if st.button("Update Helm", key=f"send_{hid}"):
+            if client:
+                client.publish(MQTT_CONFIG_TOPIC.format(hid), json.dumps({"threshold": th}))
+                st.success(f"Sent to {hid}")
+                
     with col4:
-        st.image(st.session_state.images[hid], use_column_width=True) if hid in st.session_state.images else st.info("Belum ada snapshot")
+        if hid in st.session_state.images:
+            st.image(st.session_state.images[hid], caption=f"Snapshot {hid}", use_container_width=True)
+        else:
+            st.info("Belum ada gambar")
 
+    # Chart History
     df = pd.DataFrame(st.session_state.history.get(hid, []))
     if not df.empty:
-        df["akurasi_percent"] = df["akurasi"] * 100
+        df["akurasi_percent"] = df.get("akurasi", 0) * 100
         st.line_chart(df.set_index("time")["jarak"])
         st.bar_chart(df.set_index("time")["akurasi_percent"])
 
 st.divider()
-st.caption("Smart Safety Helmet | ESP32-CAM + AI + HiveMQ Cloud + Streamlit")
+st.caption("Powered by HiveMQ Cloud & Streamlit Cloud")
