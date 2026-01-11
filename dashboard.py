@@ -16,16 +16,16 @@ if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(columns=["temperature", "distance"])
 if "data_queue" not in st.session_state:
     st.session_state.data_queue = queue.Queue()
-if "mqtt_status" not in st.session_state:
-    st.session_state.mqtt_status = "🔴 Disconnected"
+if "status_text" not in st.session_state:
+    st.session_state.status_text = "🔴 Disconnected"
 
 # --- MQTT CALLBACKS ---
 def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
-        st.session_state.mqtt_status = "🟢 Connected to HiveMQ"
+        st.session_state.status_text = "🟢 Connected"
         client.subscribe(MQTT_TOPIC)
     else:
-        st.session_state.mqtt_status = f"🟠 Connection Failed (Code {rc})"
+        st.session_state.status_text = f"🔴 Error: {rc}"
 
 def on_message(client, userdata, msg):
     try:
@@ -38,55 +38,64 @@ def on_message(client, userdata, msg):
     except:
         pass
 
-# --- SINGLETON MQTT CLIENT ---
+# --- MQTT THREAD CONTROL ---
 @st.cache_resource
-def start_mqtt():
-    # Gunakan Callback API versi 2 (kosongkan client_id untuk otomatis)
-    client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, 
-                         transport="websockets")
+def start_mqtt_service():
+    # Menggunakan Client ID acak agar tidak bentrok
+    client = mqtt.Client(transport="websockets") 
     client.on_connect = on_connect
     client.on_message = on_message
     
     try:
         client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-        thread = threading.Thread(target=client.loop_forever, daemon=True)
-        thread.start()
+        t = threading.Thread(target=client.loop_forever, daemon=True)
+        t.start()
         return client
     except:
         return None
 
-start_mqtt()
+# Jalankan Service
+start_mqtt_service()
 
-# --- DATA PROCESSING ---
+# --- PROCESSING QUEUE ---
 while not st.session_state.data_queue.empty():
-    new_row = st.session_state.data_queue.get()
-    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+    try:
+        new_row = st.session_state.data_queue.get_nowait()
+        st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+    except:
+        break
 
 if len(st.session_state.df) > 50:
     st.session_state.df = st.session_state.df.tail(50)
 
-# --- UI LAYOUT ---
+# --- UI DISPLAY ---
 st.set_page_config(page_title="Alpha Centauri Dashboard", layout="wide")
-st_autorefresh(interval=2000, key="refresh")
+st_autorefresh(interval=2000, key="mqtt_ref")
+
+# Sidebar Status
+st.sidebar.subheader("Connection Status")
+st.sidebar.write(st.session_state.status_text)
 
 st.title("🪐 Alpha Centauri Helm IoT Dashboard")
-st.sidebar.markdown(f"**Status:** {st.session_state.mqtt_status}")
 
 col1, col2 = st.columns([1, 2])
 with col1:
     st.subheader("📊 Statistik Sensor")
     if not st.session_state.df.empty:
         last = st.session_state.df.iloc[-1]
-        st.metric("Suhu", f"{last['temperature']} °C")
-        st.metric("Jarak", f"{last['distance']} cm")
+        st.metric("Temperature", f"{last['temperature']} °C")
+        st.metric("Distance", f"{last['distance']} cm")
     else:
-        st.info("Menunggu data...")
+        st.info("Menunggu data dari broker...")
 
 with col2:
     st.subheader("📈 Visualisasi Real-time")
     if not st.session_state.df.empty:
         st.line_chart(st.session_state.df[["temperature", "distance"]])
+    else:
+        st.warning("Grafik akan muncul saat data diterima.")
 
-st.subheader("📋 Raw Data (Last 50)")
-# Update sesuai saran log (width="stretch")
-st.dataframe(st.session_state.df.iloc[::-1], width="stretch")
+st.divider()
+st.subheader("📋 Raw Data Log")
+# Menggunakan width="stretch" untuk menghilangkan DeprecationWarning
+st.dataframe(st.session_state.df.iloc[::-1], width=1200)
