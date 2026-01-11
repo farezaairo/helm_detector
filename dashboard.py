@@ -10,7 +10,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # ================== MQTT CONFIG (FROM SECRETS) ==================
 MQTT_BROKER = st.secrets["mqtt"]["broker"]
-MQTT_PORT   = 443 # Port 443 untuk WebSockets TLS (paling stabil di Cloud)
+MQTT_PORT   = 443 # Tetap gunakan 443 untuk WebSockets TLS (paling stabil di Cloud)
 MQTT_USER   = st.secrets["mqtt"]["user"]
 MQTT_PASS   = st.secrets["mqtt"]["pass"]
 
@@ -38,7 +38,8 @@ for k, v in {
     "selected_helm": "ALL",
     "global_threshold": 0.7,
     "danger_count": 0,
-    "mqtt_connected": False # Flag untuk memantau status aktif koneksi
+    "mqtt_connected": False, # Flag untuk memantau status aktif koneksi
+    "mqtt_log": "Siap menghubungkan..." # Tambahan untuk memantau proses
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
@@ -72,22 +73,24 @@ def on_message(client, userdata, msg):
                 1 for h in st.session_state.helm_data.values()
                 if h.get("status") == "BAHAYA"
             )
-    except:
-        pass
+    except Exception as e:
+        st.session_state.mqtt_log = f"Data Error: {e}"
 
 def on_connect(c, u, f, rc, properties=None):
     if rc == 0:
         st.session_state.mqtt_status = "CONNECTED"
         st.session_state.mqtt_connected = True
+        st.session_state.mqtt_log = "🟢 Berhasil Terhubung ke HiveMQ"
         c.subscribe(MQTT_DATA_TOPIC)
         c.subscribe(MQTT_IMAGE_TOPIC)
     else:
         st.session_state.mqtt_status = f"FAILED ({rc})"
+        st.session_state.mqtt_log = f"🔴 Gagal: Return Code {rc}"
 
 # ================== MQTT RESOURCE ==================
 @st.cache_resource
 def get_mqtt_client():
-    # Menggunakan transport="websockets" agar bisa tembus port 443
+    # WAJIB: Gunakan transport="websockets" untuk lingkungan Cloud agar port 443 tidak diblokir
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
     client.tls_set() 
     client.username_pw_set(MQTT_USER, MQTT_PASS)
@@ -101,23 +104,25 @@ client = get_mqtt_client()
 with st.sidebar:
     st.title("🪖 Helmet Control")
     
-    # Tombol Hubungkan Manual (Ide User)
+    # Tombol Hubungkan Manual (Ide User) - Mencegah "hang" saat start
     if not st.session_state.mqtt_connected:
         if st.button("🔌 HUBUNGKAN KE BROKER", use_container_width=True):
             try:
-                # connect_async agar tidak membekukan UI Streamlit
+                st.session_state.mqtt_log = "Menghubungkan via WebSockets Port 443..."
+                # connect_async agar UI tetap responsif meski proses koneksi sedang berjalan
                 client.connect_async(MQTT_BROKER, MQTT_PORT, keepalive=60)
                 client.loop_start()
                 st.session_state.mqtt_status = "CONNECTING..."
                 st.rerun()
             except Exception as e:
-                st.error(f"Gagal: {e}")
+                st.session_state.mqtt_log = f"Fatal Error: {e}"
     else:
-        if st.button("🔌 PUTUSKAN KONEKSI", use_container_width=True):
+        if st.button("❌ PUTUSKAN KONEKSI", use_container_width=True):
             client.loop_stop()
             client.disconnect()
             st.session_state.mqtt_connected = False
             st.session_state.mqtt_status = "DISCONNECTED"
+            st.session_state.mqtt_log = "Koneksi diputus pengguna."
             st.rerun()
 
     # Status Indikator
@@ -127,7 +132,9 @@ with st.sidebar:
         st.warning("🟡 MENGHUBUNGKAN...")
     else:
         st.error(f"🔴 MQTT {st.session_state.mqtt_status}")
-        
+    
+    # Menampilkan Log untuk debugging langsung di UI
+    st.caption(f"📜 Log: {st.session_state.mqtt_log}")
     st.caption(f"Last Msg: {st.session_state.last_message_time}")
     
     if st.session_state.danger_count == 0:
@@ -161,9 +168,11 @@ if not st.session_state.mqtt_connected:
 
 if not st.session_state.helm_data:
     st.info("⏳ Menunggu data dari broker HiveMQ Cloud... Pastikan perangkat/dummy aktif.")
+    # Menampilkan petunjuk jika koneksi sudah CONNECTED tapi data belum masuk
+    st.write("Status saat ini: **Terhubung**. Jika data tidak muncul, pastikan Topic sudah sesuai.")
     st.stop()
 
-# Loop UI tetap sama (tidak merubah fitur asal)
+# Loop UI tetap sama
 for hid, d in st.session_state.helm_data.items():
     if st.session_state.selected_helm != "ALL" and hid != st.session_state.selected_helm:
         continue
