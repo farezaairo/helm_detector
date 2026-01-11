@@ -1,60 +1,46 @@
-# dashboard_iot_advanced_threadsafe.py
+# dashboard_iot_streamlit_cloud.py
 import streamlit as st
-import paho.mqtt.client as mqtt
-import threading
-import json
 import pandas as pd
+import json
+import threading
+import queue
 from datetime import datetime
 import plotly.express as px
+import paho.mqtt.client as mqtt
 from streamlit_autorefresh import st_autorefresh
 
 # =================== CONFIG ===================
-BROKER = "broker.hivemq.com"  # ganti sesuai broker ESP32
+BROKER = "broker.hivemq.com"  # Ganti sesuai broker kamu
 PORT = 8000                   # WebSocket port
 TOPIC = "alpha_centauri/sensor"
 
 DISTANCE_ALERT_THRESHOLD = 10
 TEMPERATURE_ALERT_THRESHOLD = 32
-MAX_ROWS = 100  # maksimal data terakhir yang disimpan
+MAX_ROWS = 100  # maksimal data terakhir
 
-# =================== SESSION STATE ===================
-if "df" not in st.session_state:
-    st.session_state.df = pd.DataFrame(columns=["timestamp", "temperature", "distance", "alert"])
+# =================== QUEUE ===================
+# Queue thread-safe untuk data MQTT
+data_queue = queue.Queue()
 
 # =================== MQTT CALLBACK ===================
-def on_connect(client, userdata, flags, rc):
+def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
         print("✅ Connected to MQTT broker!")
         client.subscribe(TOPIC)
     else:
-        print("❌ Failed to connect, return code", rc)
+        print("❌ Failed to connect, code:", rc)
 
 def on_message(client, userdata, msg):
     try:
         payload = msg.payload.decode()
-        data = json.loads(payload.replace("'", '"'))  # support single quotes
-        alert = ""
-        if data.get("distance") is not None and data["distance"] < DISTANCE_ALERT_THRESHOLD:
-            alert += "⚠️ Jarak terlalu dekat! "
-        if data.get("temperature") is not None and data["temperature"] > TEMPERATURE_ALERT_THRESHOLD:
-            alert += "🔥 Temperature tinggi!"
-        new_row = {
-            "timestamp": datetime.now(),
-            "temperature": data.get("temperature"),
-            "distance": data.get("distance"),
-            "alert": alert
-        }
-        # Thread-safe update session_state
-        df_new = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
-        if len(df_new) > MAX_ROWS:
-            df_new = df_new.iloc[-MAX_ROWS:]
-        st.session_state.df = df_new
+        data = json.loads(payload.replace("'", '"'))
+        data_queue.put(data)  # simpan ke queue, jangan akses session_state langsung
     except Exception as e:
         print("❌ Error parsing message:", e)
 
 # =================== MQTT THREAD ===================
 def mqtt_thread():
-    client = mqtt.Client(transport="websockets")  # wajib WebSocket untuk Streamlit Cloud
+    client = mqtt.Client(client_id="", transport="websockets", protocol=mqtt.MQTTv311)
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(BROKER, PORT)
@@ -64,14 +50,35 @@ threading.Thread(target=mqtt_thread, daemon=True).start()
 
 # =================== STREAMLIT UI ===================
 st.set_page_config(page_title="Alpha Centauri IoT Dashboard", layout="wide")
-st.title("🌌 Alpha Centauri IoT Advanced Dashboard")
+st.title("🌌 Alpha Centauri IoT Dashboard")
 st.write(f"Terhubung ke broker `{BROKER}` pada topik `{TOPIC}`")
 
-# ------------------- AUTO REFRESH -------------------
-# Refresh setiap 2 detik
-st_autorefresh(interval=2000, key="auto_refresh")
+# =================== AUTO REFRESH ===================
+st_autorefresh(interval=2000, key="auto_refresh")  # refresh tiap 2 detik
 
-# ------------------- Tabel Data Sensor -------------------
+# =================== INIT SESSION_STATE ===================
+if "df" not in st.session_state:
+    st.session_state.df = pd.DataFrame(columns=["timestamp","temperature","distance","alert"])
+
+# =================== PROCESS DATA QUEUE ===================
+while not data_queue.empty():
+    d = data_queue.get()
+    alert = ""
+    if d.get("distance") is not None and d["distance"] < DISTANCE_ALERT_THRESHOLD:
+        alert += "⚠️ Jarak terlalu dekat! "
+    if d.get("temperature") is not None and d["temperature"] > TEMPERATURE_ALERT_THRESHOLD:
+        alert += "🔥 Temperature tinggi!"
+    new_row = {
+        "timestamp": datetime.now(),
+        "temperature": d.get("temperature"),
+        "distance": d.get("distance"),
+        "alert": alert
+    }
+    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+    if len(st.session_state.df) > MAX_ROWS:
+        st.session_state.df = st.session_state.df.iloc[-MAX_ROWS:]
+
+# =================== DISPLAY DATA ===================
 st.subheader("📊 Data Sensor Terbaru")
 if not st.session_state.df.empty:
     def color_alert(row):
@@ -82,7 +89,7 @@ if not st.session_state.df.empty:
 else:
     st.info("Menunggu data sensor...")
 
-# ------------------- Grafik Sensor -------------------
+# =================== PLOT GRAFIK ===================
 st.subheader("📈 Grafik Sensor")
 if not st.session_state.df.empty:
     col1, col2 = st.columns(2)
@@ -105,9 +112,9 @@ if not st.session_state.df.empty:
         )
         st.plotly_chart(fig_dist, use_container_width=True)
 
-# ------------------- Alerts -------------------
+# =================== ALERTS ===================
 st.subheader("🚨 Alerts")
-alerts = st.session_state.df[st.session_state.df["alert"] != ""].copy()
+alerts = st.session_state.df[st.session_state.df["alert"] != ""]
 if not alerts.empty:
     for idx, row in alerts.iterrows():
         st.warning(f"{row['timestamp'].strftime('%H:%M:%S')} - {row['alert']}")
