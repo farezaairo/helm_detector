@@ -6,91 +6,79 @@ import threading
 import queue
 from streamlit_autorefresh import st_autorefresh
 
-# ================== CONFIG ==================
+# --- CONFIG ---
 MQTT_BROKER = "broker.hivemq.com"
 MQTT_PORT = 8000
 MQTT_TOPIC = "alpha_centauri/sensor"
 
-# ================== INITIALIZATION ==================
-# Inisialisasi DataFrame agar tidak error "attribute df not found"
+# --- INITIALIZATION ---
 if "df" not in st.session_state:
     st.session_state.df = pd.DataFrame(columns=["temperature", "distance"])
-
-# Queue untuk menampung data dari thread MQTT ke main thread Streamlit
 if "data_queue" not in st.session_state:
     st.session_state.data_queue = queue.Queue()
+if "mqtt_status" not in st.session_state:
+    st.session_state.mqtt_status = "🔴 Disconnected"
 
-# ================== MQTT LOGIC ==================
+# --- MQTT CALLBACKS ---
 def on_connect(client, userdata, flags, rc, properties=None):
     if rc == 0:
+        st.session_state.mqtt_status = "🟢 Connected to HiveMQ"
         client.subscribe(MQTT_TOPIC)
-        print("✅ Connected and Subscribed!")
     else:
-        print(f"❌ Connection failed: {rc}")
+        st.session_state.mqtt_status = f"🟠 Connection Failed (Code {rc})"
 
 def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
-        new_row = {
+        row = {
             "temperature": float(data.get("temperature", 0)),
             "distance": float(data.get("distance", 0))
         }
-        # Masukkan ke queue, JANGAN langsung ke session_state dari sini
-        st.session_state.data_queue.put(new_row)
-    except Exception as e:
-        print(f"❌ Error parsing: {e}")
+        st.session_state.data_queue.put(row)
+    except:
+        pass
 
-# Fungsi ini hanya dijalankan SEKALI menggunakan cache_resource
+# --- SINGLETON MQTT CLIENT ---
 @st.cache_resource
-def start_mqtt_client():
-    client = mqtt.Client(client_id="", protocol=mqtt.MQTTv5, transport="websockets")
+def start_mqtt():
+    # Gunakan Callback API versi 2 (kosongkan client_id untuk otomatis)
+    client = mqtt.Client(callback_api_version=mqtt.CallbackAPIVersion.VERSION2, 
+                         transport="websockets")
     client.on_connect = on_connect
     client.on_message = on_message
     
-    client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-    
-    # Jalankan loop di thread terpisah agar tidak memblokir UI
-    thread = threading.Thread(target=client.loop_forever, daemon=True)
-    thread.start()
-    return client
-
-# Jalankan MQTT
-start_mqtt_client()
-
-# ================== DATA PROCESSING ==================
-# Ambil semua data yang ada di antrian (queue) dan masukkan ke DataFrame
-new_data_added = False
-while not st.session_state.data_queue.empty():
     try:
-        row = st.session_state.data_queue.get_nowait()
-        st.session_state.df = pd.concat(
-            [st.session_state.df, pd.DataFrame([row])], 
-            ignore_index=True
-        )
-        new_data_added = True
-    except queue.Empty:
-        break
+        client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
+        thread = threading.Thread(target=client.loop_forever, daemon=True)
+        thread.start()
+        return client
+    except:
+        return None
 
-# Batasi jumlah baris agar dashboard tidak lambat (opsional: ambil 100 data terakhir)
-if len(st.session_state.df) > 100:
-    st.session_state.df = st.session_state.df.tail(100)
+start_mqtt()
 
-# ================== STREAMLIT UI ==================
-st.set_page_config(page_title="Alpha Centauri Helm IoT Dashboard", layout="wide")
+# --- DATA PROCESSING ---
+while not st.session_state.data_queue.empty():
+    new_row = st.session_state.data_queue.get()
+    st.session_state.df = pd.concat([st.session_state.df, pd.DataFrame([new_row])], ignore_index=True)
+
+if len(st.session_state.df) > 50:
+    st.session_state.df = st.session_state.df.tail(50)
+
+# --- UI LAYOUT ---
+st.set_page_config(page_title="Alpha Centauri Dashboard", layout="wide")
+st_autorefresh(interval=2000, key="refresh")
+
 st.title("🪐 Alpha Centauri Helm IoT Dashboard")
-
-# Refresh halaman setiap 2 detik untuk mengecek data baru di queue
-st_autorefresh(interval=2000, key="mqtt_refresh")
+st.sidebar.markdown(f"**Status:** {st.session_state.mqtt_status}")
 
 col1, col2 = st.columns([1, 2])
-
 with col1:
     st.subheader("📊 Statistik Sensor")
     if not st.session_state.df.empty:
-        last_data = st.session_state.df.iloc[-1]
-        st.metric("Temperature", f"{last_data['temperature']} °C")
-        st.metric("Distance", f"{last_data['distance']} cm")
-        st.write(st.session_state.df.describe())
+        last = st.session_state.df.iloc[-1]
+        st.metric("Suhu", f"{last['temperature']} °C")
+        st.metric("Jarak", f"{last['distance']} cm")
     else:
         st.info("Menunggu data...")
 
@@ -98,9 +86,7 @@ with col2:
     st.subheader("📈 Visualisasi Real-time")
     if not st.session_state.df.empty:
         st.line_chart(st.session_state.df[["temperature", "distance"]])
-    else:
-        st.info("Belum ada data untuk grafik")
 
-st.divider()
-st.subheader("📋 Raw Data (Last 100)")
-st.dataframe(st.session_state.df.iloc[::-1], use_container_width=True) # Urutan terbaru di atas
+st.subheader("📋 Raw Data (Last 50)")
+# Update sesuai saran log (width="stretch")
+st.dataframe(st.session_state.df.iloc[::-1], width="stretch")
