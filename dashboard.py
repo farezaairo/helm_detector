@@ -1,67 +1,71 @@
 import streamlit as st
 import paho.mqtt.client as mqtt
 import json, time
+from streamlit.runtime.scriptrunner import add_script_run_context
 
-# Ambil data dari Secrets
+# Konfigurasi dari Secrets
 BROKER = st.secrets["mqtt"]["broker"]
 USER = st.secrets["mqtt"]["user"]
 PASS = st.secrets["mqtt"]["pass"]
 
-st.set_page_config(page_title="Helmet Safety", layout="wide")
+st.set_page_config(page_title="Helmet Dashboard 3.11", layout="wide")
 
-# State untuk menyimpan data agar tidak hilang saat refresh
+# State untuk menyimpan data
 if "data_helm" not in st.session_state:
     st.session_state.data_helm = {}
 if "koneksi_aktif" not in st.session_state:
     st.session_state.koneksi_aktif = False
 
-# Fungsi Callback
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         st.session_state.koneksi_aktif = True
         client.subscribe("helmet/+/data")
-    else:
-        st.error(f"Koneksi Ditolak Broker (Kode: {rc})")
 
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
         hid = msg.topic.split("/")[1]
         st.session_state.data_helm[hid] = payload
-    except:
+    except Exception:
         pass
 
-# Inisialisasi Client tanpa Cache
-client = mqtt.Client(transport="websockets")
-client.tls_set()
-client.username_pw_set(USER, PASS)
-client.on_connect = on_connect
-client.on_message = on_message
+@st.cache_resource
+def start_mqtt_stable():
+    c = mqtt.Client(transport="websockets")
+    c.tls_set()
+    c.username_pw_set(USER, PASS)
+    c.on_connect = on_connect
+    c.on_message = on_message
+    c.connect(BROKER, 443, 60)
+    
+    # Jalankan loop dan DAFTARKAN context-nya
+    # Inilah kunci agar tidak muncul error 'missing ScriptRunContext'
+    c.loop_start()
+    return c
 
-# --- TAMPILAN DASHBOARD ---
+# Inisialisasi MQTT
+client = start_mqtt_stable()
+
+# --- BAGIAN PENTING: Daftarkan thread latar belakang ---
+# Ini mengambil thread yang sedang berjalan dan memberikan izin akses ke Streamlit
+import threading
+for thread in threading.enumerate():
+    if thread.name.startswith("Thread"):
+        add_script_run_context(thread)
+
+# --- Tampilan Dashboard ---
 st.title("🪖 Smart Safety Helmet Dashboard")
+st.sidebar.subheader("Status: 🟢 ONLINE" if st.session_state.koneksi_aktif else "🔴 OFFLINE")
 
-# Status di Sidebar
-status_teks = "🟢 TERHUBUNG" if st.session_state.koneksi_aktif else "🔴 TERPUTUS"
-st.sidebar.subheader(f"Status: {status_teks}")
-
-if st.sidebar.button("🔌 HUBUNGKAN SEKARANG"):
-    try:
-        # Gunakan koneksi langsung (Blocking) agar Python 3.13 merespon
-        client.connect(BROKER, 443, 60)
-        # Menjalankan loop sebentar untuk memproses jabat tangan
-        client.loop_start()
-        time.sleep(3) # Memberi waktu ekstra untuk koneksi Cloud
-        st.rerun()
-    except Exception as e:
-        st.error(f"Gagal Terhubung: {e}")
-
-# Tampilkan Data
 if not st.session_state.data_helm:
-    st.warning("Belum ada data. Silakan hubungkan dan kirim pesan dari HiveMQ.")
+    st.info("Koneksi aman. Menunggu data pertama dari Shiftr.io...")
 else:
     for hid, d in st.session_state.data_helm.items():
-        st.subheader(f"Helm ID: {hid}")
+        st.divider()
         c1, c2 = st.columns(2)
-        c1.metric("Jarak", f"{d.get('jarak')} cm")
-        c2.metric("Status", d.get("status"))
+        c1.metric("ID Helm", hid)
+        c2.metric("Jarak Sensor", f"{d.get('jarak')} cm", d.get("status"))
+
+# Autorefresh untuk UI
+from streamlit_autorefresh import st_autorefresh
+st_autorefresh(interval=2000, key="auto_refresh_ui")
