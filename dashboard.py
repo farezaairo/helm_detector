@@ -10,8 +10,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # ================== MQTT CONFIG (FROM SECRETS) ==================
 MQTT_BROKER = st.secrets["mqtt"]["broker"]
-# Menggunakan Port 443 (WebSocket TLS) untuk menghindari blokir firewall cloud
-MQTT_PORT   = 443 
+MQTT_PORT   = 443 # Tetap gunakan 443 untuk WebSockets TLS
 MQTT_USER   = st.secrets["mqtt"]["user"]
 MQTT_PASS   = st.secrets["mqtt"]["pass"]
 
@@ -52,7 +51,6 @@ def on_message(client, userdata, msg):
         st.session_state.last_message_time = time.strftime("%H:%M:%S")
         
         topic_parts = msg.topic.split("/")
-        # Identifikasi ID Helm: helmet/HELM01/data -> HELM01
         if len(topic_parts) >= 2:
             hid = topic_parts[1] 
 
@@ -78,10 +76,10 @@ def on_message(client, userdata, msg):
     except Exception as e:
         pass
 
-# ================== MQTT RESOURCE (PORT 443 WEBSOCKETS) ==================
+# ================== MQTT RESOURCE ==================
 @st.cache_resource
 def get_mqtt_client():
-    # Menggunakan transport websockets untuk kompatibilitas cloud terbaik
+    # Menggunakan transport="websockets" untuk cloud
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
     
     client.tls_set() 
@@ -99,23 +97,26 @@ def get_mqtt_client():
     client.on_connect = on_connect
     
     try:
-        # Menghubungkan ke port 443 (jalur HTTPS yang umum diizinkan)
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
+        # Gunakan timeout rendah agar tidak membekukan UI jika gagal
+        client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
         client.loop_start()
         return client
     except Exception as e:
         st.session_state.mqtt_status = f"ERROR: {str(e)}"
         return None
 
+# Panggil client
 client = get_mqtt_client()
 
 # ================== SIDEBAR ==================
+# Sidebar sekarang akan muncul duluan tanpa menunggu koneksi selesai
 with st.sidebar:
     st.title("🪖 Helmet Control")
     if st.session_state.mqtt_status == "CONNECTED":
         st.success("🟢 HiveMQ ONLINE")
     else:
-        st.error(f"🔴 MQTT {st.session_state.mqtt_status}")
+        st.warning(f"🟡 MQTT {st.session_state.mqtt_status}")
+        st.info("Mencoba menghubungkan via WebSockets...")
         
     st.caption(f"Last Msg: {st.session_state.last_message_time}")
     
@@ -141,8 +142,12 @@ with st.sidebar:
 # ================== DASHBOARD UI ==================
 if not st.session_state.helm_data:
     st.info("⏳ Menunggu data dari broker HiveMQ Cloud...")
+    # Tampilkan petunjuk jika status masih disconnected
+    if st.session_state.mqtt_status != "CONNECTED":
+        st.write("Pastikan Secrets Port adalah **443**")
     st.stop()
 
+# Looping data helm tetap sama
 for hid, d in st.session_state.helm_data.items():
     if st.session_state.selected_helm != "ALL" and hid != st.session_state.selected_helm:
         continue
