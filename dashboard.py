@@ -1,62 +1,65 @@
-# dashboard.py
+# ================== dashboard.py ==================
 import streamlit as st
 import pandas as pd
 import json
-import threading
 from paho.mqtt import client as mqtt
-from datetime import datetime
+from streamlit_autorefresh import st_autorefresh
+import threading
 
-# ================== KONFIGURASI MQTT ==================
-BROKER = "broker.hivemq.com"
-PORT = 8000
-TOPIC = "alpha_centauri/sensor"
+# ================== CONFIGURATION ==================
+MQTT_BROKER = "broker.hivemq.com"
+MQTT_PORT = 8000
+MQTT_TOPIC = "alpha_centauri/sensor"
 
-# ================== INISIALISASI SESSION_STATE ==================
+# ================== INITIALIZE SESSION STATE ==================
 if "df" not in st.session_state:
-    st.session_state.df = pd.DataFrame(columns=["timestamp", "temperature", "distance"])
+    st.session_state.df = pd.DataFrame(columns=["temperature", "distance"])
 
-# ================== FUNGSIONALITAS MQTT ==================
-def on_connect(client, userdata, flags, rc, properties=None):
+# ================== STREAMLIT PAGE SETUP ==================
+st.set_page_config(page_title="Alpha Centauri Helm IoT Dashboard", layout="wide")
+st.title("🪐 Alpha Centauri Helm IoT Dashboard")
+
+# ================== AUTO REFRESH ==================
+# Refresh interval setiap 2 detik
+st_autorefresh(interval=2000, key="auto_refresh")
+
+# ================== MQTT CALLBACK ==================
+def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("✅ Connected to MQTT broker!")
-        client.subscribe(TOPIC)
+        client.subscribe(MQTT_TOPIC)
     else:
         print(f"❌ Failed to connect, return code {rc}")
 
 def on_message(client, userdata, msg):
     try:
-        payload = msg.payload.decode()
-        data = json.loads(payload)
+        data = json.loads(msg.payload.decode())
         new_row = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "temperature": data.get("temperature"),
-            "distance": data.get("distance")
+            "temperature": float(data.get("temperature", 0)),
+            "distance": float(data.get("distance", 0)),
         }
-        # Update session_state safely
-        df = st.session_state.df
-        st.session_state.df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+        st.session_state.df = pd.concat(
+            [st.session_state.df, pd.DataFrame([new_row])],
+            ignore_index=True
+        )
     except Exception as e:
         print("❌ Error parsing message:", e)
 
+# ================== MQTT THREAD ==================
 def mqtt_thread():
-    client = mqtt.Client(client_id="", transport="websockets", protocol=mqtt.MQTTv311)
+    client = mqtt.Client(transport="websockets")
     client.on_connect = on_connect
     client.on_message = on_message
-    client.connect(BROKER, PORT)
+    client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
     client.loop_forever()
 
-# Jalankan MQTT di thread terpisah
-threading.Thread(target=mqtt_thread, daemon=True).start()
+thread = threading.Thread(target=mqtt_thread, daemon=True)
+thread.start()
 
-# ================== STREAMLIT DASHBOARD ==================
-st.set_page_config(page_title="Alpha Centauri Helm IoT Dashboard", layout="wide")
-st.title("🪐 Alpha Centauri Helm IoT Dashboard")
-
-# Tampilkan tabel data
+# ================== DASHBOARD ==================
 st.subheader("Data Sensor Terbaru")
 st.dataframe(st.session_state.df)
 
-# Visualisasi data
 st.subheader("Visualisasi Sensor")
 if not st.session_state.df.empty:
     chart_data = st.session_state.df[["temperature", "distance"]].astype(float)
@@ -64,5 +67,6 @@ if not st.session_state.df.empty:
 else:
     st.info("Menunggu data sensor...")
 
-# Auto refresh dashboard setiap 2 detik
-st_autorefresh = st.experimental_rerun
+st.subheader("Statistik Sensor")
+if not st.session_state.df.empty:
+    st.write(st.session_state.df.describe())
