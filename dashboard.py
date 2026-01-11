@@ -8,7 +8,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # --- CONFIG ---
 MQTT_BROKER = "broker.hivemq.com"
-MQTT_PORT = 8000
+MQTT_PORT = 1883
 MQTT_TOPIC = "alpha_centauri/sensor"
 
 # --- INITIALIZATION ---
