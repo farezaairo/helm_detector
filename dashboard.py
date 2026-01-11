@@ -10,8 +10,8 @@ from streamlit_autorefresh import st_autorefresh
 
 # ================== MQTT CONFIG (FROM SECRETS) ==================
 MQTT_BROKER = st.secrets["mqtt"]["broker"]
-# Port diubah ke 8884 untuk WebSocket agar stabil di Streamlit Cloud
-MQTT_PORT   = 8884 
+# Menggunakan Port 443 (WebSocket TLS) untuk menghindari blokir firewall cloud
+MQTT_PORT   = 443 
 MQTT_USER   = st.secrets["mqtt"]["user"]
 MQTT_PASS   = st.secrets["mqtt"]["pass"]
 
@@ -52,35 +52,36 @@ def on_message(client, userdata, msg):
         st.session_state.last_message_time = time.strftime("%H:%M:%S")
         
         topic_parts = msg.topic.split("/")
-        # Menyesuaikan dengan struktur helmet/ID/data
-        hid = topic_parts[1] 
+        # Identifikasi ID Helm: helmet/HELM01/data -> HELM01
+        if len(topic_parts) >= 2:
+            hid = topic_parts[1] 
 
-        if msg.topic.endswith("/data"):
-            payload = json.loads(msg.payload.decode())
-            payload["time"] = time.strftime("%H:%M:%S")
-            st.session_state.helm_data[hid] = payload
-            
-            if hid not in st.session_state.history:
-                st.session_state.history[hid] = []
-            st.session_state.history[hid].append(payload)
-            st.session_state.history[hid] = st.session_state.history[hid][-MAX_HISTORY:]
+            if msg.topic.endswith("/data"):
+                payload = json.loads(msg.payload.decode())
+                payload["time"] = time.strftime("%H:%M:%S")
+                st.session_state.helm_data[hid] = payload
+                
+                if hid not in st.session_state.history:
+                    st.session_state.history[hid] = []
+                st.session_state.history[hid].append(payload)
+                st.session_state.history[hid] = st.session_state.history[hid][-MAX_HISTORY:]
 
-        elif msg.topic.endswith("/image"):
-            payload = json.loads(msg.payload.decode())
-            img_data = base64.b64decode(payload["image"])
-            st.session_state.images[hid] = Image.open(BytesIO(img_data))
+            elif msg.topic.endswith("/image"):
+                payload = json.loads(msg.payload.decode())
+                img_data = base64.b64decode(payload["image"])
+                st.session_state.images[hid] = Image.open(BytesIO(img_data))
 
-        st.session_state.danger_count = sum(
-            1 for h in st.session_state.helm_data.values()
-            if h.get("status") == "BAHAYA"
-        )
+            st.session_state.danger_count = sum(
+                1 for h in st.session_state.helm_data.values()
+                if h.get("status") == "BAHAYA"
+            )
     except Exception as e:
         pass
 
-# ================== MQTT RESOURCE (WEBSOCKET VERSION) ==================
+# ================== MQTT RESOURCE (PORT 443 WEBSOCKETS) ==================
 @st.cache_resource
 def get_mqtt_client():
-    # MENGGUNAKAN TRANSPORT WEBSOCKETS UNTUK CLOUD COMPATIBILITY
+    # Menggunakan transport websockets untuk kompatibilitas cloud terbaik
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
     
     client.tls_set() 
@@ -98,7 +99,7 @@ def get_mqtt_client():
     client.on_connect = on_connect
     
     try:
-        # Menghubungkan ke port 8884 (WebSocket Secure)
+        # Menghubungkan ke port 443 (jalur HTTPS yang umum diizinkan)
         client.connect(MQTT_BROKER, MQTT_PORT, 60)
         client.loop_start()
         return client
@@ -184,4 +185,4 @@ for hid, d in st.session_state.helm_data.items():
         st.bar_chart(df.set_index("time")["akurasi_percent"])
 
 st.divider()
-st.caption("Powered by HiveMQ Cloud & Streamlit Cloud (via WebSockets)")
+st.caption("Powered by HiveMQ Cloud & Streamlit Cloud (via WebSockets Port 443)")
