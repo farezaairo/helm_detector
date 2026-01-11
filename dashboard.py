@@ -10,7 +10,7 @@ from streamlit_autorefresh import st_autorefresh
 
 # ================== MQTT CONFIG (FROM SECRETS) ==================
 MQTT_BROKER = st.secrets["mqtt"]["broker"]
-MQTT_PORT   = 443 # Tetap gunakan 443 untuk WebSockets TLS
+MQTT_PORT   = 443 # Port 443 untuk WebSockets TLS (paling stabil di Cloud)
 MQTT_USER   = st.secrets["mqtt"]["user"]
 MQTT_PASS   = st.secrets["mqtt"]["pass"]
 
@@ -25,8 +25,6 @@ st.set_page_config(
     page_title="Smart Safety Helmet Dashboard",
     layout="wide"
 )
-st.title("🪖 Smart Safety Helmet Dashboard")
-st.caption("IoT + AI Safety Monitoring | ESP32-CAM | HiveMQ Cloud MQTT")
 
 st_autorefresh(interval=REFRESH_INTERVAL_MS, key="auto_refresh")
 
@@ -40,11 +38,12 @@ for k, v in {
     "selected_helm": "ALL",
     "global_threshold": 0.7,
     "danger_count": 0,
+    "mqtt_connected": False # Flag untuk memantau status aktif koneksi
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
 
-# ================== MQTT CALLBACK ==================
+# ================== MQTT CALLBACKS ==================
 def on_message(client, userdata, msg):
     try:
         st.session_state.mqtt_status = "CONNECTED"
@@ -73,50 +72,61 @@ def on_message(client, userdata, msg):
                 1 for h in st.session_state.helm_data.values()
                 if h.get("status") == "BAHAYA"
             )
-    except Exception as e:
+    except:
         pass
+
+def on_connect(c, u, f, rc, properties=None):
+    if rc == 0:
+        st.session_state.mqtt_status = "CONNECTED"
+        st.session_state.mqtt_connected = True
+        c.subscribe(MQTT_DATA_TOPIC)
+        c.subscribe(MQTT_IMAGE_TOPIC)
+    else:
+        st.session_state.mqtt_status = f"FAILED ({rc})"
 
 # ================== MQTT RESOURCE ==================
 @st.cache_resource
 def get_mqtt_client():
-    # Menggunakan transport="websockets" untuk cloud
+    # Menggunakan transport="websockets" agar bisa tembus port 443
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
-    
     client.tls_set() 
     client.username_pw_set(MQTT_USER, MQTT_PASS)
     client.on_message = on_message
-
-    def on_connect(c, u, f, rc, properties=None):
-        if rc == 0:
-            st.session_state.mqtt_status = "CONNECTED"
-            c.subscribe(MQTT_DATA_TOPIC)
-            c.subscribe(MQTT_IMAGE_TOPIC)
-        else:
-            st.session_state.mqtt_status = f"FAILED ({rc})"
-
     client.on_connect = on_connect
-    
-    try:
-        # Gunakan timeout rendah agar tidak membekukan UI jika gagal
-        client.connect(MQTT_BROKER, MQTT_PORT, keepalive=60)
-        client.loop_start()
-        return client
-    except Exception as e:
-        st.session_state.mqtt_status = f"ERROR: {str(e)}"
-        return None
+    return client
 
-# Panggil client
 client = get_mqtt_client()
 
-# ================== SIDEBAR ==================
-# Sidebar sekarang akan muncul duluan tanpa menunggu koneksi selesai
+# ================== SIDEBAR (DENGAN TOMBOL KONEKSI) ==================
 with st.sidebar:
     st.title("🪖 Helmet Control")
+    
+    # Tombol Hubungkan Manual (Ide User)
+    if not st.session_state.mqtt_connected:
+        if st.button("🔌 HUBUNGKAN KE BROKER", use_container_width=True):
+            try:
+                # connect_async agar tidak membekukan UI Streamlit
+                client.connect_async(MQTT_BROKER, MQTT_PORT, keepalive=60)
+                client.loop_start()
+                st.session_state.mqtt_status = "CONNECTING..."
+                st.rerun()
+            except Exception as e:
+                st.error(f"Gagal: {e}")
+    else:
+        if st.button("🔌 PUTUSKAN KONEKSI", use_container_width=True):
+            client.loop_stop()
+            client.disconnect()
+            st.session_state.mqtt_connected = False
+            st.session_state.mqtt_status = "DISCONNECTED"
+            st.rerun()
+
+    # Status Indikator
     if st.session_state.mqtt_status == "CONNECTED":
         st.success("🟢 HiveMQ ONLINE")
+    elif st.session_state.mqtt_status == "CONNECTING...":
+        st.warning("🟡 MENGHUBUNGKAN...")
     else:
-        st.warning(f"🟡 MQTT {st.session_state.mqtt_status}")
-        st.info("Mencoba menghubungkan via WebSockets...")
+        st.error(f"🔴 MQTT {st.session_state.mqtt_status}")
         
     st.caption(f"Last Msg: {st.session_state.last_message_time}")
     
@@ -133,21 +143,27 @@ with st.sidebar:
     st.session_state.global_threshold = st.slider("🧠 Global AI Threshold", 0.3, 0.95, st.session_state.global_threshold, 0.05)
     
     if st.button("📤 Broadcast ke Semua"):
-        if client:
+        if st.session_state.mqtt_connected:
             for hid in st.session_state.helm_data:
                 topic = MQTT_CONFIG_TOPIC.format(hid)
                 client.publish(topic, json.dumps({"threshold": st.session_state.global_threshold}))
             st.success("Broadcast Terkirim")
+        else:
+            st.error("MQTT Belum Terhubung")
 
 # ================== DASHBOARD UI ==================
-if not st.session_state.helm_data:
-    st.info("⏳ Menunggu data dari broker HiveMQ Cloud...")
-    # Tampilkan petunjuk jika status masih disconnected
-    if st.session_state.mqtt_status != "CONNECTED":
-        st.write("Pastikan Secrets Port adalah **443**")
+st.title("🪖 Smart Safety Helmet Dashboard")
+st.caption("IoT + AI Safety Monitoring | ESP32-CAM | HiveMQ Cloud MQTT")
+
+if not st.session_state.mqtt_connected:
+    st.warning("⚠️ Silakan klik tombol 'HUBUNGKAN KE BROKER' di sidebar untuk memulai monitoring.")
     st.stop()
 
-# Looping data helm tetap sama
+if not st.session_state.helm_data:
+    st.info("⏳ Menunggu data dari broker HiveMQ Cloud... Pastikan perangkat/dummy aktif.")
+    st.stop()
+
+# Loop UI tetap sama (tidak merubah fitur asal)
 for hid, d in st.session_state.helm_data.items():
     if st.session_state.selected_helm != "ALL" and hid != st.session_state.selected_helm:
         continue
@@ -173,9 +189,8 @@ for hid, d in st.session_state.helm_data.items():
     with col3:
         th = st.slider(f"Ambang {hid}", 0.3, 0.95, st.session_state.global_threshold, 0.05, key=f"th_{hid}")
         if st.button("Update Helm", key=f"send_{hid}"):
-            if client:
-                client.publish(MQTT_CONFIG_TOPIC.format(hid), json.dumps({"threshold": th}))
-                st.success(f"Sent to {hid}")
+            client.publish(MQTT_CONFIG_TOPIC.format(hid), json.dumps({"threshold": th}))
+            st.success(f"Sent to {hid}")
                 
     with col4:
         if hid in st.session_state.images:
