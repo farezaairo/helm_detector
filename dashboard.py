@@ -9,16 +9,15 @@ from paho.mqtt import client as mqtt
 from streamlit_autorefresh import st_autorefresh
 
 # ================== MQTT CONFIG (FROM SECRETS) ==================
-# Mengambil kredensial dari st.secrets agar aman di GitHub
 MQTT_BROKER = st.secrets["mqtt"]["broker"]
-MQTT_PORT   = st.secrets["mqtt"]["port"]
+# Port diubah ke 8884 untuk WebSocket agar stabil di Streamlit Cloud
+MQTT_PORT   = 8884 
 MQTT_USER   = st.secrets["mqtt"]["user"]
 MQTT_PASS   = st.secrets["mqtt"]["pass"]
 
-# Struktur Topik HiveMQ (Lebih simpel dari Adafruit)
-MQTT_DATA_TOPIC   = st.secrets["mqtt"]["topic_data"]    # contoh: helmet/+/data
-MQTT_IMAGE_TOPIC  = st.secrets["mqtt"]["topic_image"]   # contoh: helmet/+/image
-MQTT_CONFIG_TOPIC = st.secrets["mqtt"]["topic_config"]  # contoh: helmet/{}/config
+MQTT_DATA_TOPIC   = st.secrets["mqtt"]["topic_data"]    
+MQTT_IMAGE_TOPIC  = st.secrets["mqtt"]["topic_image"]   
+MQTT_CONFIG_TOPIC = st.secrets["mqtt"]["topic_config"]  
 
 REFRESH_INTERVAL_MS = 2000
 MAX_HISTORY = 20
@@ -30,7 +29,6 @@ st.set_page_config(
 st.title("🪖 Smart Safety Helmet Dashboard")
 st.caption("IoT + AI Safety Monitoring | ESP32-CAM | HiveMQ Cloud MQTT")
 
-# Auto refresh untuk memperbarui UI saat ada data baru di session_state
 st_autorefresh(interval=REFRESH_INTERVAL_MS, key="auto_refresh")
 
 # ================== SESSION STATE ==================
@@ -53,8 +51,8 @@ def on_message(client, userdata, msg):
         st.session_state.mqtt_status = "CONNECTED"
         st.session_state.last_message_time = time.strftime("%H:%M:%S")
         
-        # Parsing ID Helm dari topik (misal: helmet/HELM01/data -> HELM01)
         topic_parts = msg.topic.split("/")
+        # Menyesuaikan dengan struktur helmet/ID/data
         hid = topic_parts[1] 
 
         if msg.topic.endswith("/data"):
@@ -62,36 +60,31 @@ def on_message(client, userdata, msg):
             payload["time"] = time.strftime("%H:%M:%S")
             st.session_state.helm_data[hid] = payload
             
-            # Update History
             if hid not in st.session_state.history:
                 st.session_state.history[hid] = []
             st.session_state.history[hid].append(payload)
             st.session_state.history[hid] = st.session_state.history[hid][-MAX_HISTORY:]
 
         elif msg.topic.endswith("/image"):
-            # HiveMQ mendukung payload besar untuk image base64
             payload = json.loads(msg.payload.decode())
             img_data = base64.b64decode(payload["image"])
             st.session_state.images[hid] = Image.open(BytesIO(img_data))
 
-        # Hitung status bahaya
         st.session_state.danger_count = sum(
             1 for h in st.session_state.helm_data.values()
             if h.get("status") == "BAHAYA"
         )
     except Exception as e:
-        print(f"Error parsing message: {e}")
+        pass
 
-# ================== MQTT RESOURCE (STABLE CONNECTION) ==================
+# ================== MQTT RESOURCE (WEBSOCKET VERSION) ==================
 @st.cache_resource
 def get_mqtt_client():
-    # Menggunakan CallbackAPIVersion.VERSION2 untuk library paho-mqtt terbaru
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    # MENGGUNAKAN TRANSPORT WEBSOCKETS UNTUK CLOUD COMPATIBILITY
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, transport="websockets")
     
-    # WAJIB UNTUK HIVEMQ CLOUD
     client.tls_set() 
     client.username_pw_set(MQTT_USER, MQTT_PASS)
-    
     client.on_message = on_message
 
     def on_connect(c, u, f, rc, properties=None):
@@ -105,11 +98,12 @@ def get_mqtt_client():
     client.on_connect = on_connect
     
     try:
+        # Menghubungkan ke port 8884 (WebSocket Secure)
         client.connect(MQTT_BROKER, MQTT_PORT, 60)
         client.loop_start()
         return client
     except Exception as e:
-        st.error(f"Koneksi Gagal: {e}")
+        st.session_state.mqtt_status = f"ERROR: {str(e)}"
         return None
 
 client = get_mqtt_client()
@@ -183,7 +177,6 @@ for hid, d in st.session_state.helm_data.items():
         else:
             st.info("Belum ada gambar")
 
-    # Chart History
     df = pd.DataFrame(st.session_state.history.get(hid, []))
     if not df.empty:
         df["akurasi_percent"] = df.get("akurasi", 0) * 100
@@ -191,4 +184,4 @@ for hid, d in st.session_state.helm_data.items():
         st.bar_chart(df.set_index("time")["akurasi_percent"])
 
 st.divider()
-st.caption("Powered by HiveMQ Cloud & Streamlit Cloud")
+st.caption("Powered by HiveMQ Cloud & Streamlit Cloud (via WebSockets)")
