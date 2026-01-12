@@ -1,85 +1,113 @@
 import streamlit as st
-import pandas as pd
-from streamlit_autorefresh import st_autorefresh
+import paho.mqtt.client as mqtt
+import json
+import base64
+from PIL import Image
+import io
+import time  # <--- Tambahan ini agar time.sleep() jalan
 
-# --- KONFIGURASI DATA ---
-SHEET_ID = "1tJPdtFcoKGAg213iNav55PySeZaPuSxhs1ReoqAGUpI"
-SHEET_NAME = "Sheet1"
-URL_CSV = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
+# ================= KONFIGURASI MQTT =================
+MQTT_BROKER = "broker.emqx.io"
+MQTT_PORT = 1883
+MQTT_TOPIC = "helm/safety/data"
 
-# --- SETTING PAGE ---
+# ================= SETUP TAMPILAN =================
 st.set_page_config(
-    page_title="Alpha Centauri - Smart Safety Helmet",
-    page_icon="🛡️",
+    page_title="Dashboard Helm Safety",
+    page_icon="🪖",
     layout="wide"
 )
 
-# Autorefresh setiap 5 detik
-st_autorefresh(interval=5000, key="datarefresh")
-
-st.title("🪐 Alpha Centauri - AI Safety Helmet Detection")
-st.markdown("---")
-
-try:
-    # Membaca data dari Google Sheets
-    df = pd.read_csv(URL_CSV)
-    df.columns = ["Jarak", "Status_Keamanan", "Akurasi_AI", "Image_URL", "Waktu_Kejadian"]
+# --- 1. INISIALISASI KONEKSI HANYA SEKALI ---
+if 'mqtt_client' not in st.session_state:
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "Streamlit_Dashboard_Client")
     
-    if not df.empty:
-        last_data = df.iloc[-1]
-        
-        # Penentuan Label Klasifikasi Bahaya
-        status = str(last_data['Status_Keamanan']).upper()
-        is_danger = "BAHAYA" in status or status == "0"
+    def on_connect(client, userdata, flags, rc):
+        if rc == 0:
+            client.subscribe(MQTT_TOPIC)
+            print("MQTT Terhubung")
+    
+    def on_message(client, userdata, msg):
+        try:
+            payload = json.loads(msg.payload.decode())
+            st.session_state.data = payload
+            st.session_state.connected = True
+        except Exception as e:
+            print(f"Error: {e}")
 
-        # --- BAGIAN INDIKATOR UTAMA ---
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            jarak = pd.to_numeric(last_data['Jarak'], errors='coerce')
-            st.metric(label="📏 Jarak Objek", value=f"{jarak} cm")
-            
-        with col2:
-            if is_danger:
-                st.error("🚨 KLASIFIKASI: BAHAYA")
-            else:
-                st.success("✅ KLASIFIKASI: AMAN")
-                
-        with col3:
-            try:
-                acc_val = float(last_data['Akurasi_AI'])
-                st.metric(label="🎯 Confidence Score", value=f"{acc_val * 100:.1f}%")
-            except:
-                st.metric(label="🎯 Validasi AI", value=str(last_data['Akurasi_AI']))
+    client.on_connect = on_connect
+    client.on_message = on_message
+    
+    try:
+        client.connect(MQTT_BROKER, MQTT_PORT, 60)
+    except Exception as e:
+        st.error(f"Gagal koneksi awal: {e}")
+    
+    st.session_state.mqtt_client = client
+    st.session_state.connected = False
 
-        st.markdown("---")
+# --- 2. INISIALISASI DATA JIKA BELUM ADA ---
+if 'data' not in st.session_state:
+    st.session_state.data = {
+        "jarak": 0,
+        "Bahaya": 0.0,
+        "Aman": 0.0,
+        "status": "Menunggu...",
+        "img": None
+    }
 
-        # --- BAGIAN TAMPILAN GAMBAR & LOG ---
-        left_col, right_col = st.columns([1, 1])
-        
-        with left_col:
-            st.subheader("📷 Tangkapan Layar Terakhir")
-            
-            # Menampilkan Label Bahaya/Aman Tepat di Atas Gambar
-            if is_danger:
-                st.markdown("<h3 style='color:red; text-align:center;'>⚠️ TERDETEKSI BAHAYA</h3>", unsafe_allow_html=True)
-            else:
-                st.markdown("<h3 style='color:green; text-align:center;'>✅ AREA AMAN</h3>", unsafe_allow_html=True)
+# --- 3. PROSES MQTT (AMBIL DATA) ---
+st.session_state.mqtt_client.loop(timeout=0.1) 
 
-            img_link = str(last_data['Image_URL'])
-            if "http" in img_link:
-                # Menampilkan Gambar Langsung
-                st.image(img_link, use_container_width=True)
-                st.caption(f"Waktu Deteksi: {last_data['Waktu_Kejadian']}")
-            else:
-                st.warning("Menunggu link gambar dari Google Drive...")
+# --- 4. TAMPILKAN DASHBOARD ---
+st.title("🪖 Dashboard Monitoring Keselamatan Helm")
+d = st.session_state.data
 
-        with right_col:
-            st.subheader("📋 Riwayat Deteksi Terbaru")
-            st.dataframe(df.tail(10).iloc[::-1], use_container_width=True)
+col1, col2, col3 = st.columns([1, 2, 1])
 
+with col1:
+    st.subheader("Status Deteksi")
+    status = d.get('status', 'Unknown')
+    
+    if status == "BAHAYA":
+        st.error(f"### 🚨 {status}")
+    elif status == "WASPADA":
+        st.warning(f"### ⚠️ {status}")
     else:
-        st.info("Belum ada data masuk.")
+        st.success(f"### ✅ {status}")
+    
+    st.metric(label="Jarak Objek", value=f"{d.get('jarak', 0)} cm")
 
-except Exception as e:
-    st.error(f"Error: {e}")
+with col2:
+    st.subheader("Kamera Real-time")
+    img_base64 = d.get('img')
+    
+    if img_base64:
+        try:
+            img_data = base64.b64decode(img_base64)
+            img = Image.open(io.BytesIO(img_data))
+            st.image(img, use_container_width=True, caption="Feed Kamera ESP32")
+        except Exception:
+            st.text("Memproses gambar...")
+    else:
+        st.info("Menunggu gambar dari kamera...")
+
+with col3:
+    st.subheader("Akurasi AI")
+    score_bahaya = d.get('Bahaya', 0.0) * 100
+    score_aman = d.get('Aman', 0.0) * 100
+    
+    st.write(f"🔴 **Bahaya**: {score_bahaya:.2f}%")
+    st.progress(score_bahaya / 100)
+    
+    st.write(f"🟢 **Aman**: {score_aman:.2f}%")
+    st.progress(score_aman / 100)
+
+if st.session_state.get("connected", False):
+    st.success("🟢 Terhubung ke MQTT Broker")
+else:
+    st.warning("🟡 Menunggu Koneksi...")
+
+# --- 5. JADWAL RERUN ---
+time.sleep(0.1) 
+st.rerun()
