@@ -13,8 +13,8 @@ MQTT_TOPIC = "helm/safety/data"
 
 # ================= SETUP TAMPILAN =================
 st.set_page_config(
-    page_title="Dashboard Helm Safety",
-    page_icon="🪖",
+    page_title="Dashboard AIGIS",
+    page_icon="",
     layout="wide"
 )
 
