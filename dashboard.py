@@ -60,7 +60,7 @@ if 'data' not in st.session_state:
 st.session_state.mqtt_client.loop(timeout=0.1) 
 
 # --- 4. TAMPILKAN DASHBOARD ---
-st.title("🪖 Dashboard Monitoring Keselamatan Helm")
+st.title("Dashboard Monitoring")
 d = st.session_state.data
 
 col1, col2, col3 = st.columns([1, 2, 1])
