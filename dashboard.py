@@ -2,54 +2,37 @@ import streamlit as st
 import pandas as pd
 from streamlit_autorefresh import st_autorefresh
 
-# --- CONFIG ---
-# PERBAIKAN: Hanya masukkan kodenya saja, bukan seluruh link
-SHEET_ID = "1tJPdtFcoKGAg213iNav55PySeZaPuSxhs1ReoqAGUpI" 
-SHEET_NAME = "Sheet1" 
-# URL ini akan mengambil data dalam format CSV agar bisa dibaca Pandas
-URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet={SHEET_NAME}"
+SHEET_ID = "1tJPdtFcoKGAg213iNav55PySeZaPuSxhs1ReoqAGUpI"
+URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/gviz/tq?tqx=out:csv&sheet=Sheet1"
 
-# --- UI SETUP ---
-st.set_page_config(page_title="Alpha Centauri Dashboard", layout="wide")
-st_autorefresh(interval=5000, key="datarefresh") 
+st.set_page_config(page_title="Safety AI Dashboard", layout="wide")
+st_autorefresh(interval=5000, key="refresh")
 
-st.title("🪐 Alpha Centauri Helm IoT Dashboard")
+st.title("🛡️ Smart Safety Helmet - AI Detection")
 
-# --- FETCH DATA ---
 try:
-    # Membaca data langsung dari Google Sheets via CSV
     df = pd.read_csv(URL)
+    df.columns = ["Jarak", "Status AI", "Akurasi", "Image URL", "Waktu"]
     
-    # Memastikan kolom sesuai dengan header di Google Sheets Anda
-    df = df[["temperature", "distance"]]
-    
-    st.sidebar.success("🟢 Connected to Sheets Database")
-    
-    col1, col2 = st.columns([1, 2])
-    
-    with col1:
-        st.subheader("📊 Statistik")
-        if not df.empty:
-            last = df.iloc[-1]
-            st.metric("Temperature", f"{last['temperature']} °C")
-            st.metric("Distance", f"{last['distance']} cm")
-            st.write("Summary Statistics:")
-            st.write(df.describe())
-        else:
-            st.info("Sheet masih kosong...")
+    if not df.empty:
+        last = df.iloc[-1]
+        
+        # UI Metrics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Jarak Objek", f"{last['Jarak']} cm")
+        with col2:
+            st.metric("Status Keamanan", last['Status AI'])
+        with col3:
+            # Menampilkan akurasi dalam persen
+            st.metric("Confidence Score", f"{last['Akurasi'] * 100:.1f}%")
 
-    with col2:
-        st.subheader("📈 Real-time Chart")
-        if not df.empty:
-            st.line_chart(df[["temperature", "distance"]])
+        # Display Image
+        st.subheader("📷 Bukti Tangkapan Layar")
+        st.image(last['Image URL'], use_container_width=True)
 
-    st.divider()
-    st.subheader("📋 Raw Data Log")
-    # Menampilkan data terbaru di paling atas
-    st.dataframe(df.iloc[::-1], width=1200)
+    st.subheader("📊 Riwayat Deteksi")
+    st.dataframe(df.iloc[::-1])
 
 except Exception as e:
-    st.sidebar.error("🔴 Menunggu Data / Link Salah")
-    st.info("Pastikan Header di Sheet adalah 'temperature' dan 'distance' (huruf kecil semua).")
-    # Menampilkan error asli untuk memudahkan debugging
-    st.write(f"Debug Error: {e}")
+    st.info("Menunggu data dari perangkat...")
