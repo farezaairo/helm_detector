@@ -8,16 +8,19 @@ import time
 import pandas as pd
 import altair as alt
 
-# ================= MQTT CONFIG =================
+# ================= KONFIGURASI MQTT =================
 MQTT_BROKER = "broker.emqx.io"
 MQTT_PORT = 1883
 MQTT_TOPIC = "helm/safety/data"
 
-# ================= PAGE =================
-st.set_page_config(page_title="Dashboard AIGIS", layout="wide")
+# ================= SETUP TAMPILAN =================
+st.set_page_config(
+    page_title="Dashboard AIGIS",
+    layout="wide"
+)
 
 # ================= MQTT INIT =================
-if "mqtt_client" not in st.session_state:
+if 'mqtt_client' not in st.session_state:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
 
     def on_connect(client, userdata, flags, rc):
@@ -58,9 +61,9 @@ if "history" not in st.session_state:
     }
 
 # ================= MQTT LOOP =================
-st.session_state.mqtt_client.loop(timeout=0.05)
+st.session_state.mqtt_client.loop(timeout=0.1)
 
-# ================= SAVE DATA =================
+# ================= SIMPAN DATA =================
 d = st.session_state.data
 idx = len(st.session_state.history["idx"])
 
@@ -76,7 +79,34 @@ for k in st.session_state.history:
 # ================= UI =================
 st.title("Dashboard Monitoring AIGIS")
 
-# ================= DATAFRAME =================
+col1, col2, col3 = st.columns([1, 2, 1])
+
+with col1:
+    if d["status"] == "BAHAYA":
+        st.error("🚨 BAHAYA")
+    elif d["status"] == "WASPADA":
+        st.warning("⚠️ WASPADA")
+    else:
+        st.success("✅ AMAN")
+    st.metric("Jarak Objek", f"{d['jarak']} cm")
+
+with col2:
+    if d["img"]:
+        img = Image.open(io.BytesIO(base64.b64decode(d["img"])))
+        st.image(img, use_container_width=True)
+    else:
+        st.info("Menunggu kamera...")
+
+with col3:
+    st.write(f"🔴 Bahaya: {d['Bahaya']*100:.2f}%")
+    st.progress(d["Bahaya"])
+    st.write(f"🟢 Aman: {d['Aman']*100:.2f}%")
+    st.progress(d["Aman"])
+
+# ================= GRAFIK =================
+st.divider()
+st.subheader("📊 Grafik Real-Time")
+
 df = pd.DataFrame({
     "Index": st.session_state.history["idx"],
     "Jarak (cm)": st.session_state.history["jarak"],
@@ -84,36 +114,31 @@ df = pd.DataFrame({
     "Aman (%)": st.session_state.history["aman"]
 })
 
-# ================= SAFETY GUARD (INI KUNCI FIX) =================
-if df.empty:
-    st.warning("Menunggu data AI...")
-    time.sleep(0.1)
-    st.rerun()
-
-# ================= GRAFIK JARAK =================
+# ===== BASE STYLE (GRID ONLY, NO BOX) =====
 base = alt.Chart(df).encode(
     x=alt.X("Index", axis=alt.Axis(grid=True, title=None))
-)
-
-chart_jarak = (
-    base.mark_area(
-        color="#60a5fa",
-        opacity=0.25,
-        interpolate="monotone"
-    ).encode(
-        y=alt.Y("Jarak (cm)", axis=alt.Axis(grid=True))
-    )
-    +
-    base.mark_line(
-        color="#2563eb",
-        strokeWidth=3,
-        interpolate="monotone"
-    ).encode(
-        y="Jarak (cm)"
-    )
 ).properties(height=260)
 
-# ================= GRAFIK AI (BUG FIXED) =================
+# ===== GRAFIK JARAK (SMOOTH + AREA) =====
+area_jarak = base.mark_area(
+    color="#60a5fa",
+    opacity=0.25,
+    interpolate="monotone"
+).encode(
+    y=alt.Y("Jarak (cm)", axis=alt.Axis(grid=True))
+)
+
+line_jarak = base.mark_line(
+    color="#2563eb",
+    strokeWidth=3,
+    interpolate="monotone"
+).encode(
+    y="Jarak (cm)"
+)
+
+chart_jarak = area_jarak + line_jarak
+
+# ===== GRAFIK AI (SMOOTH + AREA) =====
 df_ai = df.melt(
     id_vars="Index",
     value_vars=["Bahaya (%)", "Aman (%)"],
@@ -121,24 +146,12 @@ df_ai = df.melt(
     value_name="Nilai"
 )
 
-# >>> JIKA df_ai KOSONG, JANGAN RENDER <<<
-if df_ai.empty:
-    df_ai = pd.DataFrame({
-        "Index": [idx],
-        "Kondisi": ["Bahaya (%)", "Aman (%)"],
-        "Nilai": [0, 0]
-    })
-
 area_ai = alt.Chart(df_ai).mark_area(
     opacity=0.25,
     interpolate="monotone"
 ).encode(
     x=alt.X("Index", axis=alt.Axis(grid=True, title=None)),
-    y=alt.Y(
-        "Nilai",
-        scale=alt.Scale(domain=[0, 100]),
-        axis=alt.Axis(grid=True)
-    ),
+    y=alt.Y("Nilai", scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(grid=True)),
     color=alt.Color(
         "Kondisi",
         scale=alt.Scale(
@@ -155,19 +168,18 @@ line_ai = alt.Chart(df_ai).mark_line(
 ).encode(
     x="Index",
     y="Nilai",
-    color="Kondisi"
+    color=alt.Color("Kondisi", legend=None)
 )
 
 chart_ai = (area_ai + line_ai).properties(height=260)
 
-# ================= DISPLAY =================
 g1, g2 = st.columns(2)
 with g1:
     st.altair_chart(chart_jarak, use_container_width=True)
 with g2:
     st.altair_chart(chart_ai, use_container_width=True)
 
-# ================= STATUS =================
+# ================= STATUS MQTT =================
 if st.session_state.connected:
     st.success("🟢 MQTT Connected")
 else:
