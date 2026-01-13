@@ -77,17 +77,17 @@ for k in st.session_state.history:
     st.session_state.history[k] = st.session_state.history[k][-MAX:]
 
 # ================= UI =================
-st.title("Dashboard Monitoring AIGIS")
+st.title("Dashboard Monitoring")
 
 col1, col2, col3 = st.columns([1, 2, 1])
 
 with col1:
     if d["status"] == "BAHAYA":
-        st.error("🚨 BAHAYA")
+        st.error("BAHAYA")
     elif d["status"] == "WASPADA":
-        st.warning("⚠️ WASPADA")
+        st.warning("WASPADA")
     else:
-        st.success("✅ AMAN")
+        st.success("AMAN")
     st.metric("Jarak Objek", f"{d['jarak']} cm")
 
 with col2:
@@ -98,14 +98,14 @@ with col2:
         st.info("Menunggu kamera...")
 
 with col3:
-    st.write(f"🔴 Bahaya: {d['Bahaya']*100:.2f}%")
+    st.write(f"Bahaya: {d['Bahaya']*100:.2f}%")
     st.progress(d["Bahaya"])
-    st.write(f"🟢 Aman: {d['Aman']*100:.2f}%")
+    st.write(f" Aman: {d['Aman']*100:.2f}%")
     st.progress(d["Aman"])
 
 # ================= GRAFIK =================
 st.divider()
-st.subheader("📊 Grafik Real-Time")
+st.subheader("Grafik Real-Time")
 
 df = pd.DataFrame({
     "Index": st.session_state.history["idx"],
@@ -181,9 +181,9 @@ with g2:
 
 # ================= STATUS MQTT =================
 if st.session_state.connected:
-    st.success("🟢 MQTT Connected")
+    st.success(" MQTT Connected")
 else:
-    st.warning("🟡 Waiting MQTT...")
+    st.warning("Waiting MQTT...")
 
 # ================= REAL-TIME =================
 time.sleep(0.1)
