@@ -22,14 +22,14 @@ st.set_page_config(
 # ================= CSS UNTUK WARNA PROGRESS =================
 st.markdown("""
 <style>
-/* Progress Bahaya - Merah */
-.bahaya-progress > div > div {
-    background-color: #dc2626 !important;
+/* Semua progress default (Aman) */
+div[data-testid="stProgressBar"] > div {
+    background-color: #16a34a !important;  /* Hijau */
 }
 
-/* Progress Aman - Hijau */
-.aman-progress > div > div {
-    background-color: #16a34a !important;
+/* Progress pertama (Bahaya) */
+div[data-testid="stProgressBar"]:nth-of-type(1) > div {
+    background-color: #dc2626 !important; /* Merah */
 }
 </style>
 """, unsafe_allow_html=True)
@@ -115,14 +115,10 @@ with col2:
 
 with col3:
     st.write(f"Bahaya: {d['Bahaya']*100:.2f}%")
-    st.markdown('<div class="bahaya-progress">', unsafe_allow_html=True)
     st.progress(d["Bahaya"])
-    st.markdown('</div>', unsafe_allow_html=True)
 
     st.write(f"Aman: {d['Aman']*100:.2f}%")
-    st.markdown('<div class="aman-progress">', unsafe_allow_html=True)
     st.progress(d["Aman"])
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ================= GRAFIK =================
