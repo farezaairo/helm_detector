@@ -4,7 +4,11 @@ import json
 import base64
 from PIL import Image
 import io
-import time  # <--- Tambahan ini agar time.sleep() jalan
+import time
+
+# TAMBAHAN (WAJIB UNTUK WARNA GRAFIK)
+import pandas as pd
+import altair as alt
 
 # ================= KONFIGURASI MQTT =================
 MQTT_BROKER = "broker.emqx.io"
@@ -56,7 +60,7 @@ if 'data' not in st.session_state:
         "img": None
     }
 
-# ===== TAMBAHAN: INISIALISASI DATA GRAFIK =====
+# --- HISTORY DATA GRAFIK ---
 if "history" not in st.session_state:
     st.session_state.history = {
         "jarak": [],
@@ -64,25 +68,25 @@ if "history" not in st.session_state:
         "aman": []
     }
 
-# --- 3. PROSES MQTT (AMBIL DATA) ---
+# --- 3. PROSES MQTT ---
 st.session_state.mqtt_client.loop(timeout=0.1)
 
-# --- 4. TAMPILKAN DASHBOARD ---
+# --- 4. DASHBOARD ---
 st.title("Dashboard Monitoring")
 d = st.session_state.data
 
-# ===== TAMBAHAN: SIMPAN DATA UNTUK GRAFIK =====
+# SIMPAN DATA GRAFIK
 st.session_state.history["jarak"].append(d.get("jarak", 0))
 st.session_state.history["bahaya"].append(d.get("Bahaya", 0.0) * 100)
 st.session_state.history["aman"].append(d.get("Aman", 0.0) * 100)
 
-# Batasi agar tidak berat
 MAX_POINTS = 100
 for k in st.session_state.history:
     st.session_state.history[k] = st.session_state.history[k][-MAX_POINTS:]
 
 col1, col2, col3 = st.columns([1, 2, 1])
 
+# ===== STATUS =====
 with col1:
     st.subheader("Status Deteksi")
     status = d.get('status', 'Unknown')
@@ -94,8 +98,9 @@ with col1:
     else:
         st.success(f"###  {status}")
     
-    st.metric(label="Jarak Objek", value=f"{d.get('jarak', 0)} cm")
+    st.metric("Jarak Objek", f"{d.get('jarak', 0)} cm")
 
+# ===== KAMERA =====
 with col2:
     st.subheader("Kamera Real-time")
     img_base64 = d.get('img')
@@ -105,46 +110,69 @@ with col2:
             img_data = base64.b64decode(img_base64)
             img = Image.open(io.BytesIO(img_data))
             st.image(img, use_container_width=True, caption="Feed Kamera ESP32")
-        except Exception:
+        except:
             st.text("Memproses gambar...")
     else:
         st.info("Menunggu gambar dari kamera...")
 
+# ===== AKURASI =====
 with col3:
     st.subheader("Akurasi AI")
-    score_bahaya = d.get('Bahaya', 0.0) * 100
-    score_aman = d.get('Aman', 0.0) * 100
-    
-    st.write(f"🔴 **Bahaya**: {score_bahaya:.2f}%")
-    st.progress(score_bahaya / 100)
-    
-    st.write(f"🟢 **Aman**: {score_aman:.2f}%")
-    st.progress(score_aman / 100)
+    st.write(f"🔴 **Bahaya**: {d.get('Bahaya',0)*100:.2f}%")
+    st.progress(d.get('Bahaya',0))
+    st.write(f"🟢 **Aman**: {d.get('Aman',0)*100:.2f}%")
+    st.progress(d.get('Aman',0))
 
-# ===== TAMBAHAN: GRAFIK REAL-TIME =====
+# ================= GRAFIK =================
 st.divider()
 st.subheader("Grafik Real-Time")
 
 grafik1, grafik2 = st.columns(2)
 
+# ===== GRAFIK JARAK (TETAP LINE CHART) =====
 with grafik1:
     st.write("Jarak Objek (cm)")
     st.line_chart({
         "Jarak (cm)": st.session_state.history["jarak"]
     })
 
+# ===== GRAFIK AI (MERAH & HIJAU FIX) =====
 with grafik2:
-    st.write("Skor AI (%)")
-    st.line_chart({
+    st.write("AI Prediksi (%)")
+
+    df = pd.DataFrame({
+        "Index": range(len(st.session_state.history["bahaya"])),
         "Bahaya (%)": st.session_state.history["bahaya"],
         "Aman (%)": st.session_state.history["aman"]
     })
 
+    df_melt = df.melt(
+        id_vars="Index",
+        value_vars=["Bahaya (%)", "Aman (%)"],
+        var_name="Kondisi",
+        value_name="Persentase"
+    )
+
+    chart = alt.Chart(df_melt).mark_line(strokeWidth=3).encode(
+        x="Index",
+        y=alt.Y("Persentase", scale=alt.Scale(domain=[0, 100])),
+        color=alt.Color(
+            "Kondisi",
+            scale=alt.Scale(
+                domain=["Bahaya (%)", "Aman (%)"],
+                range=["red", "green"]
+            )
+        )
+    ).properties(height=300)
+
+    st.altair_chart(chart, use_container_width=True)
+
+# ===== STATUS MQTT =====
 if st.session_state.get("connected", False):
     st.success("🟢 Terhubung ke MQTT Broker")
 else:
     st.warning("🟡 Menunggu Koneksi...")
 
-# --- 5. JADWAL RERUN ---
+# ===== AUTO REFRESH =====
 time.sleep(0.1)
 st.rerun()
