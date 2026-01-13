@@ -19,21 +19,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# ================= CSS UNTUK WARNA PROGRESS =================
-st.markdown("""
-<style>
-/* Semua progress default (Aman) */
-div[data-testid="stProgressBar"] > div {
-    background-color: #16a34a !important;  /* Hijau */
-}
-
-/* Progress pertama (Bahaya) */
-div[data-testid="stProgressBar"]:nth-of-type(1) > div {
-    background-color: #dc2626 !important; /* Merah */
-}
-</style>
-""", unsafe_allow_html=True)
-
 
 # ================= MQTT INIT =================
 if 'mqtt_client' not in st.session_state:
@@ -114,11 +99,57 @@ with col2:
         st.info("Menunggu kamera...")
 
 with col3:
-    st.write(f"Bahaya: {d['Bahaya']*100:.2f}%")
-    st.progress(d["Bahaya"])
+    st.subheader("Akurasi AI")
 
-    st.write(f"Aman: {d['Aman']*100:.2f}%")
-    st.progress(d["Aman"])
+    # ===== DATAFRAME PROGRESS =====
+    df_progress = pd.DataFrame({
+        "Label": ["Bahaya", "Aman"],
+        "Nilai": [d["Bahaya"] * 100, d["Aman"] * 100],
+        "Warna": ["Bahaya", "Aman"]
+    })
+
+    # ===== BASE PROGRESS BAR =====
+    progress_base = alt.Chart(df_progress).encode(
+        x=alt.X(
+            "Nilai:Q",
+            scale=alt.Scale(domain=[0, 100]),
+            axis=None
+        ),
+        y=alt.Y(
+            "Label:N",
+            sort=["Bahaya", "Aman"],
+            axis=alt.Axis(labelFontSize=13, title=None)
+        ),
+        color=alt.Color(
+            "Warna:N",
+            scale=alt.Scale(
+                domain=["Bahaya", "Aman"],
+                range=["#dc2626", "#16a34a"]  # MERAH & HIJAU
+            ),
+            legend=None
+        )
+    )
+
+    # ===== BAR (ISI PROGRESS) =====
+    bar = progress_base.mark_bar(
+        height=18,
+        cornerRadius=6
+    )
+
+    # ===== TEKS PERSEN =====
+    text = progress_base.mark_text(
+        align="left",
+        dx=5,
+        dy=1,
+        color="white",
+        fontWeight="bold"
+    ).encode(
+        text=alt.Text("Nilai:Q", format=".1f")
+    )
+
+    chart_progress = (bar + text).properties(height=100)
+
+    st.altair_chart(chart_progress, use_container_width=True)
 
 
 # ================= GRAFIK =================
