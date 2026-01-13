@@ -77,7 +77,7 @@ for k in st.session_state.history:
     st.session_state.history[k] = st.session_state.history[k][-MAX:]
 
 # ================= UI =================
-st.title("Dashboard Monitoring")
+st.title("Dashboard Monitoring - AEGIS")
 
 col1, col2, col3 = st.columns([1, 2, 1])
 
