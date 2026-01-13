@@ -5,7 +5,6 @@ import base64
 from PIL import Image
 import io
 import time
-
 import pandas as pd
 import altair as alt
 
@@ -82,7 +81,6 @@ st.title("Dashboard Monitoring AIGIS")
 
 col1, col2, col3 = st.columns([1, 2, 1])
 
-# -------- STATUS --------
 with col1:
     if d["status"] == "BAHAYA":
         st.error("🚨 BAHAYA")
@@ -90,10 +88,8 @@ with col1:
         st.warning("⚠️ WASPADA")
     else:
         st.success("✅ AMAN")
-
     st.metric("Jarak Objek", f"{d['jarak']} cm")
 
-# -------- KAMERA --------
 with col2:
     if d["img"]:
         img = Image.open(io.BytesIO(base64.b64decode(d["img"])))
@@ -101,7 +97,6 @@ with col2:
     else:
         st.info("Menunggu kamera...")
 
-# -------- AKURASI --------
 with col3:
     st.write(f"🔴 Bahaya: {d['Bahaya']*100:.2f}%")
     st.progress(d["Bahaya"])
@@ -119,23 +114,31 @@ df = pd.DataFrame({
     "Aman (%)": st.session_state.history["aman"]
 })
 
-# ===== STYLE CHART BERSIH (NO GRID) =====
-base_chart = alt.Chart(df).encode(
-    x=alt.X("Index", axis=alt.Axis(grid=False, title=None))
-).properties(height=280)
+# ===== BASE STYLE (GRID ONLY, NO BOX) =====
+base = alt.Chart(df).encode(
+    x=alt.X("Index", axis=alt.Axis(grid=True, title=None))
+).properties(height=260)
 
-# ===== GRAFIK JARAK =====
-chart_jarak = base_chart.mark_line(
-    color="#2563eb",
-    strokeWidth=3
+# ===== GRAFIK JARAK (SMOOTH + AREA) =====
+area_jarak = base.mark_area(
+    color="#60a5fa",
+    opacity=0.25,
+    interpolate="monotone"
 ).encode(
-    y=alt.Y(
-        "Jarak (cm)",
-        axis=alt.Axis(grid=False, title="Jarak (cm)")
-    )
+    y=alt.Y("Jarak (cm)", axis=alt.Axis(grid=True))
 )
 
-# ===== GRAFIK AI =====
+line_jarak = base.mark_line(
+    color="#2563eb",
+    strokeWidth=3,
+    interpolate="monotone"
+).encode(
+    y="Jarak (cm)"
+)
+
+chart_jarak = area_jarak + line_jarak
+
+# ===== GRAFIK AI (SMOOTH + AREA) =====
 df_ai = df.melt(
     id_vars="Index",
     value_vars=["Bahaya (%)", "Aman (%)"],
@@ -143,13 +146,12 @@ df_ai = df.melt(
     value_name="Nilai"
 )
 
-chart_ai = alt.Chart(df_ai).mark_line(strokeWidth=3).encode(
-    x=alt.X("Index", axis=alt.Axis(grid=False, title=None)),
-    y=alt.Y(
-        "Nilai",
-        scale=alt.Scale(domain=[0, 100]),
-        axis=alt.Axis(grid=False, title="Persentase (%)")
-    ),
+area_ai = alt.Chart(df_ai).mark_area(
+    opacity=0.25,
+    interpolate="monotone"
+).encode(
+    x=alt.X("Index", axis=alt.Axis(grid=True, title=None)),
+    y=alt.Y("Nilai", scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(grid=True)),
     color=alt.Color(
         "Kondisi",
         scale=alt.Scale(
@@ -158,12 +160,22 @@ chart_ai = alt.Chart(df_ai).mark_line(strokeWidth=3).encode(
         ),
         legend=alt.Legend(orient="top")
     )
-).properties(height=280)
+)
+
+line_ai = alt.Chart(df_ai).mark_line(
+    strokeWidth=3,
+    interpolate="monotone"
+).encode(
+    x="Index",
+    y="Nilai",
+    color=alt.Color("Kondisi", legend=None)
+)
+
+chart_ai = (area_ai + line_ai).properties(height=260)
 
 g1, g2 = st.columns(2)
 with g1:
     st.altair_chart(chart_jarak, use_container_width=True)
-
 with g2:
     st.altair_chart(chart_ai, use_container_width=True)
 
@@ -173,6 +185,6 @@ if st.session_state.connected:
 else:
     st.warning("🟡 Waiting MQTT...")
 
-# ================= REAL-TIME LOOP =================
+# ================= REAL-TIME =================
 time.sleep(0.1)
 st.rerun()
