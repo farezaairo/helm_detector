@@ -56,12 +56,30 @@ if 'data' not in st.session_state:
         "img": None
     }
 
+# ===== TAMBAHAN: INISIALISASI DATA GRAFIK =====
+if "history" not in st.session_state:
+    st.session_state.history = {
+        "jarak": [],
+        "bahaya": [],
+        "aman": []
+    }
+
 # --- 3. PROSES MQTT (AMBIL DATA) ---
-st.session_state.mqtt_client.loop(timeout=0.1) 
+st.session_state.mqtt_client.loop(timeout=0.1)
 
 # --- 4. TAMPILKAN DASHBOARD ---
 st.title("Dashboard Monitoring")
 d = st.session_state.data
+
+# ===== TAMBAHAN: SIMPAN DATA UNTUK GRAFIK =====
+st.session_state.history["jarak"].append(d.get("jarak", 0))
+st.session_state.history["bahaya"].append(d.get("Bahaya", 0.0) * 100)
+st.session_state.history["aman"].append(d.get("Aman", 0.0) * 100)
+
+# Batasi agar tidak berat
+MAX_POINTS = 100
+for k in st.session_state.history:
+    st.session_state.history[k] = st.session_state.history[k][-MAX_POINTS:]
 
 col1, col2, col3 = st.columns([1, 2, 1])
 
@@ -70,11 +88,11 @@ with col1:
     status = d.get('status', 'Unknown')
     
     if status == "BAHAYA":
-        st.error(f"### 🚨 {status}")
+        st.error(f"###  {status}")
     elif status == "WASPADA":
-        st.warning(f"### ⚠️ {status}")
+        st.warning(f"###  {status}")
     else:
-        st.success(f"### ✅ {status}")
+        st.success(f"###  {status}")
     
     st.metric(label="Jarak Objek", value=f"{d.get('jarak', 0)} cm")
 
@@ -103,11 +121,30 @@ with col3:
     st.write(f"🟢 **Aman**: {score_aman:.2f}%")
     st.progress(score_aman / 100)
 
+# ===== TAMBAHAN: GRAFIK REAL-TIME =====
+st.divider()
+st.subheader("Grafik Real-Time")
+
+grafik1, grafik2 = st.columns(2)
+
+with grafik1:
+    st.write("Jarak Objek (cm)")
+    st.line_chart({
+        "Jarak (cm)": st.session_state.history["jarak"]
+    })
+
+with grafik2:
+    st.write("Skor AI (%)")
+    st.line_chart({
+        "Bahaya (%)": st.session_state.history["bahaya"],
+        "Aman (%)": st.session_state.history["aman"]
+    })
+
 if st.session_state.get("connected", False):
     st.success("🟢 Terhubung ke MQTT Broker")
 else:
     st.warning("🟡 Menunggu Koneksi...")
 
 # --- 5. JADWAL RERUN ---
-time.sleep(0.1) 
+time.sleep(0.1)
 st.rerun()
