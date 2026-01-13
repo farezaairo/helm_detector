@@ -15,9 +15,25 @@ MQTT_TOPIC = "helm/safety/data"
 
 # ================= SETUP TAMPILAN =================
 st.set_page_config(
-    page_title="Dashboard AIGIS",
+    page_title="Dashboard AEGIS",
     layout="wide"
 )
+
+# ================= CSS UNTUK WARNA PROGRESS =================
+st.markdown("""
+<style>
+/* Progress Bahaya - Merah */
+.bahaya-progress > div > div {
+    background-color: #dc2626 !important;
+}
+
+/* Progress Aman - Hijau */
+.aman-progress > div > div {
+    background-color: #16a34a !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 
 # ================= MQTT INIT =================
 if 'mqtt_client' not in st.session_state:
@@ -99,9 +115,15 @@ with col2:
 
 with col3:
     st.write(f"Bahaya: {d['Bahaya']*100:.2f}%")
+    st.markdown('<div class="bahaya-progress">', unsafe_allow_html=True)
     st.progress(d["Bahaya"])
-    st.write(f" Aman: {d['Aman']*100:.2f}%")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.write(f"Aman: {d['Aman']*100:.2f}%")
+    st.markdown('<div class="aman-progress">', unsafe_allow_html=True)
     st.progress(d["Aman"])
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 # ================= GRAFIK =================
 st.divider()
