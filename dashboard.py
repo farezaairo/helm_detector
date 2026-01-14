@@ -15,7 +15,7 @@ MQTT_TOPIC = "helm/safety/data"
 
 # ================= SETUP TAMPILAN =================
 st.set_page_config(
-    page_title="Dashboard AEGIS",
+    page_title="Dashboard",
     layout="wide"
 )
 
@@ -78,7 +78,7 @@ for k in st.session_state.history:
     st.session_state.history[k] = st.session_state.history[k][-MAX:]
 
 # ================= UI =================
-st.title("Dashboard Monitoring - AEGIS")
+st.title("Dashboard Monitoring")
 
 col1, col2, col3 = st.columns([1, 2, 1])
 
