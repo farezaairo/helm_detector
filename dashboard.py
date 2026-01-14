@@ -13,25 +13,43 @@ MQTT_BROKER = "broker.emqx.io"
 MQTT_PORT = 1883
 MQTT_TOPIC = "helm/safety/data"
 
-# ================= SETUP TAMPILAN =================
+# ================= PAGE CONFIG =================
 st.set_page_config(
-    page_title="Dashboard",
+    page_title="Smart Safety Helmet Dashboard",
+    page_icon="",
     layout="wide"
 )
 
+# ================= SIDEBAR =================
+st.sidebar.title("🦺 Safety Helmet Control")
+st.sidebar.caption("Industrial IoT & Edge AI Monitoring")
+
+mode = st.sidebar.radio(
+    "Mode Tampilan",
+    ["Semua Pekerja", "Pilih Helm"]
+)
+
+st.sidebar.divider()
 
 # ================= MQTT INIT =================
-if 'mqtt_client' not in st.session_state:
+if "mqtt_client" not in st.session_state:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
 
     def on_connect(client, userdata, flags, rc):
         if rc == 0:
             client.subscribe(MQTT_TOPIC)
+            st.session_state.connected = True
+        else:
+            st.session_state.connected = False
 
     def on_message(client, userdata, msg):
         try:
-            st.session_state.data = json.loads(msg.payload.decode())
-            st.session_state.connected = True
+            payload = json.loads(msg.payload.decode())
+
+            # Fallback jika ID helm belum dikirim
+            payload.setdefault("id_helm", "HELM-001")
+
+            st.session_state.data = payload
         except:
             pass
 
@@ -45,6 +63,7 @@ if 'mqtt_client' not in st.session_state:
 # ================= DATA DEFAULT =================
 if "data" not in st.session_state:
     st.session_state.data = {
+        "id_helm": "HELM-001",
         "jarak": 0,
         "Bahaya": 0.0,
         "Aman": 0.0,
@@ -52,188 +71,176 @@ if "data" not in st.session_state:
         "img": None
     }
 
-# ================= HISTORY =================
+# ================= HISTORY PER HELM =================
 if "history" not in st.session_state:
-    st.session_state.history = {
-        "idx": [],
-        "jarak": [],
-        "bahaya": [],
-        "aman": []
-    }
+    st.session_state.history = {}
 
 # ================= MQTT LOOP =================
 st.session_state.mqtt_client.loop(timeout=0.1)
 
 # ================= SIMPAN DATA =================
 d = st.session_state.data
-idx = len(st.session_state.history["idx"])
+helm_id = d.get("id_helm", "HELM-001")
 
-st.session_state.history["idx"].append(idx)
-st.session_state.history["jarak"].append(d["jarak"])
-st.session_state.history["bahaya"].append(d["Bahaya"] * 100)
-st.session_state.history["aman"].append(d["Aman"] * 100)
+if helm_id not in st.session_state.history:
+    st.session_state.history[helm_id] = {
+        "idx": [],
+        "jarak": [],
+        "bahaya": [],
+        "aman": []
+    }
+
+h = st.session_state.history[helm_id]
+idx = len(h["idx"])
+
+h["idx"].append(idx)
+h["jarak"].append(d["jarak"])
+h["bahaya"].append(d["Bahaya"] * 100)
+h["aman"].append(d["Aman"] * 100)
 
 MAX = 100
-for k in st.session_state.history:
-    st.session_state.history[k] = st.session_state.history[k][-MAX:]
+for k in h:
+    h[k] = h[k][-MAX:]
 
-# ================= UI =================
-st.title("Dashboard Monitoring")
+# ================= SIDEBAR PILIH HELM =================
+helm_list = list(st.session_state.history.keys())
 
+if mode == "Pilih Helm":
+    selected_helm = st.sidebar.multiselect(
+        "Pilih ID Helm",
+        helm_list,
+        default=helm_list[:1]
+    )
+else:
+    selected_helm = helm_list
+
+# ================= HEADER =================
+st.title(" Smart Safety Helmet Monitoring Dashboard")
+st.caption("Real-Time • Edge AI • Blind Spot Mitigation")
+
+# ================= STATUS RINGKAS =================
+c1, c2, c3 = st.columns(3)
+c1.metric("Helm Aktif", f"{len(selected_helm)} Unit")
+c2.metric("Status MQTT", "Connected" if st.session_state.connected else "Waiting")
+c3.metric("Update Terakhir", time.strftime("%H:%M:%S"))
+
+st.divider()
+
+# ================= UI UTAMA =================
 col1, col2, col3 = st.columns([1, 2, 1])
 
 with col1:
     if d["status"] == "BAHAYA":
-        st.error("BAHAYA")
+        st.error(" BAHAYA")
     elif d["status"] == "WASPADA":
-        st.warning("WASPADA")
+        st.warning(" WASPADA")
     else:
-        st.success("AMAN")
+        st.success(" AMAN")
+
     st.metric("Jarak Objek", f"{d['jarak']} cm")
+    st.caption(f"Helm ID: {helm_id}")
 
 with col2:
     if d["img"]:
         img = Image.open(io.BytesIO(base64.b64decode(d["img"])))
         st.image(img, use_container_width=True)
     else:
-        st.info("Menunggu kamera...")
+        st.info("Menunggu kamera ESP32-CAM...")
 
 with col3:
     st.subheader("Akurasi AI")
 
-    # ===== DATAFRAME PROGRESS =====
     df_progress = pd.DataFrame({
         "Label": ["Bahaya", "Aman"],
         "Nilai": [d["Bahaya"] * 100, d["Aman"] * 100],
         "Warna": ["Bahaya", "Aman"]
     })
 
-    # ===== BASE PROGRESS BAR =====
-    progress_base = alt.Chart(df_progress).encode(
-        x=alt.X(
-            "Nilai:Q",
-            scale=alt.Scale(domain=[0, 100]),
-            axis=None
-        ),
-        y=alt.Y(
-            "Label:N",
-            sort=["Bahaya", "Aman"],
-            axis=alt.Axis(labelFontSize=13, title=None)
-        ),
+    base = alt.Chart(df_progress).encode(
+        x=alt.X("Nilai:Q", scale=alt.Scale(domain=[0, 100]), axis=None),
+        y=alt.Y("Label:N", axis=alt.Axis(labelFontSize=13)),
         color=alt.Color(
             "Warna:N",
             scale=alt.Scale(
                 domain=["Bahaya", "Aman"],
-                range=["#dc2626", "#16a34a"]  # MERAH & HIJAU
+                range=["#dc2626", "#16a34a"]
             ),
             legend=None
         )
     )
 
-    # ===== BAR (ISI PROGRESS) =====
-    bar = progress_base.mark_bar(
-        height=18,
-        cornerRadius=6
-    )
-
-    # ===== TEKS PERSEN =====
-    text = progress_base.mark_text(
+    bar = base.mark_bar(height=18, cornerRadius=6)
+    text = base.mark_text(
         align="left",
         dx=5,
         dy=1,
         color="white",
         fontWeight="bold"
-    ).encode(
-        text=alt.Text("Nilai:Q", format=".1f")
-    )
+    ).encode(text=alt.Text("Nilai:Q", format=".1f"))
 
-    chart_progress = (bar + text).properties(height=100)
+    st.altair_chart((bar + text).properties(height=100), use_container_width=True)
 
-    st.altair_chart(chart_progress, use_container_width=True)
+# ================= DATAFRAME MULTI HELM =================
+df_all = []
 
+for hid in selected_helm:
+    h = st.session_state.history[hid]
+    df_temp = pd.DataFrame({
+        "Index": h["idx"],
+        "Jarak (cm)": h["jarak"],
+        "Bahaya (%)": h["bahaya"],
+        "Aman (%)": h["aman"],
+        "Helm": hid
+    })
+    df_all.append(df_temp)
+
+if not df_all:
+    st.warning("Tidak ada helm dipilih")
+    st.stop()
+
+df = pd.concat(df_all)
 
 # ================= GRAFIK =================
-st.divider()
 st.subheader("Grafik Real-Time")
 
-df = pd.DataFrame({
-    "Index": st.session_state.history["idx"],
-    "Jarak (cm)": st.session_state.history["jarak"],
-    "Bahaya (%)": st.session_state.history["bahaya"],
-    "Aman (%)": st.session_state.history["aman"]
-})
-
-# ===== BASE STYLE (GRID ONLY, NO BOX) =====
-base = alt.Chart(df).encode(
-    x=alt.X("Index", axis=alt.Axis(grid=True, title=None))
-).properties(height=260)
-
-# ===== GRAFIK JARAK (SMOOTH + AREA) =====
-area_jarak = base.mark_area(
-    color="#60a5fa",
-    opacity=0.25,
-    interpolate="monotone"
-).encode(
-    y=alt.Y("Jarak (cm)", axis=alt.Axis(grid=True))
-)
-
-line_jarak = base.mark_line(
-    color="#2563eb",
-    strokeWidth=3,
-    interpolate="monotone"
-).encode(
-    y="Jarak (cm)"
-)
-
-chart_jarak = area_jarak + line_jarak
-
-# ===== GRAFIK AI (SMOOTH + AREA) =====
-df_ai = df.melt(
-    id_vars="Index",
-    value_vars=["Bahaya (%)", "Aman (%)"],
-    var_name="Kondisi",
-    value_name="Nilai"
-)
-
-area_ai = alt.Chart(df_ai).mark_area(
-    opacity=0.25,
-    interpolate="monotone"
-).encode(
-    x=alt.X("Index", axis=alt.Axis(grid=True, title=None)),
-    y=alt.Y("Nilai", scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(grid=True)),
-    color=alt.Color(
-        "Kondisi",
-        scale=alt.Scale(
-            domain=["Bahaya (%)", "Aman (%)"],
-            range=["red", "green"]
-        ),
-        legend=alt.Legend(orient="top")
-    )
-)
-
-line_ai = alt.Chart(df_ai).mark_line(
-    strokeWidth=3,
-    interpolate="monotone"
-).encode(
-    x="Index",
-    y="Nilai",
-    color=alt.Color("Kondisi", legend=None)
-)
-
-chart_ai = (area_ai + line_ai).properties(height=260)
-
 g1, g2 = st.columns(2)
+
 with g1:
+    chart_jarak = alt.Chart(df).mark_line(
+        strokeWidth=3,
+        interpolate="monotone"
+    ).encode(
+        x="Index",
+        y="Jarak (cm)",
+        color="Helm:N"
+    ).properties(height=280)
+
     st.altair_chart(chart_jarak, use_container_width=True)
+
 with g2:
+    df_ai = df.melt(
+        id_vars=["Index", "Helm"],
+        value_vars=["Bahaya (%)", "Aman (%)"],
+        var_name="Kondisi",
+        value_name="Nilai"
+    )
+
+    chart_ai = alt.Chart(df_ai).mark_line(
+        strokeWidth=3,
+        interpolate="monotone"
+    ).encode(
+        x="Index",
+        y=alt.Y("Nilai", scale=alt.Scale(domain=[0, 100])),
+        color="Kondisi",
+        strokeDash="Helm"
+    ).properties(height=280)
+
     st.altair_chart(chart_ai, use_container_width=True)
 
-# ================= STATUS MQTT =================
-if st.session_state.connected:
-    st.success(" MQTT Connected")
-else:
-    st.warning("Waiting MQTT...")
+# ================= FOOTER =================
+st.divider()
+st.caption("© Smart Safety Helmet | IoT • Edge AI • Industrial Safety")
 
-# ================= REAL-TIME =================
+# ================= REAL-TIME LOOP =================
 time.sleep(0.1)
 st.rerun()
